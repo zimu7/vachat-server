@@ -4135,7 +4135,7 @@ dependencies = [
 
 [[package]]
 name = "vachat-server"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
