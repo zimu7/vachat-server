@@ -1,0 +1,16 @@
+{
+  "android": {
+    "version_code": 1,
+    "version_name": "v0.2.0",
+    "build_time": "2026-06-20 14:33:32",
+    "description": "android v0.2.0",
+    "file_url": "https://chat.zimu.pub/apk/vachat-release.apk"
+  },
+  "ios": {
+    "version_code": 1,
+    "version_name": "v0.2.0",
+    "build_time": "2026-06-20 14:33:32",
+    "description": "ios v0.2.0",
+    "file_url": "https://chat.zimu.pub/ipa/vachat-release.ipa"
+  }
+}

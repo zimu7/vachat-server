@@ -1,0 +1,10 @@
+target
+/data
+.idea
+.zed
+.claude
+build/docker/config
+build/docker/wwwroot
+build/docker/*.zip
+build/docker/vachat-server
+wwwroot

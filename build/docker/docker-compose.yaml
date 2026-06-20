@@ -1,0 +1,27 @@
+version: '3'
+services:
+  vachat:
+    image: vachat-server:latest
+    container_name: vachat-server
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+        "/docker-entrypoint.sh"
+        - "--network.bind"
+        - "0.0.0.0:3000"
+        - "--network.domain"
+        - "localhost"
+#    environment:
+#      - UID=1000
+#      - GID=1000
+#      - ADMIN_USER=admin
+#      - ADMIN_PASSWORD=123456
+#      - DOMAIN=localhost
+    volumes:
+      - /share/data/docker/vachat-server/data:/home/vachat-server/data
+    expose:
+      - 3000
+    ports:
+      - 3000:3000/tcp
+    restart: always

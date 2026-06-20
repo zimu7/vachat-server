@@ -1,0 +1,11 @@
+[source.crates-io]
+replace-with = 'ustc'
+
+[source.ustc]
+registry = "https://mirrors.ustc.edu.cn/crates.io-index.git"
+
+[source.tsinghua]
+registry = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
+
+[source.aliyun]
+registry = "https://mirrors.aliyun.com/crates.io-index.git"

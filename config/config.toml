@@ -1,0 +1,35 @@
+webclient_url = ""
+
+[system]
+data_dir = "./data"
+wwwroot_dir = "./wwwroot"
+token_expiry_seconds = 300
+refresh_token_expiry_seconds = 604800
+log_level = "debug"
+
+[network]
+bind = "0.0.0.0:3000"
+# domain = "your-domain-name"
+matrix_domain= "localhost"
+frontend_url = "http://127.0.0.1:3000"
+enable_swagger = true
+
+# [network.tls]
+# type = "self_signed"
+
+# [network.tls]
+# type = "certificate"
+# cert = "...."
+# key = "...."
+# path = "./cert/"
+
+# [network.tls]
+# type = "acme_http_01"
+# directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+# http_bind = "0.0.0.0:80"
+# cache_path = "./data/cert"
+
+# [network.tls]
+# type = "acme_tls_alpn_01"
+# directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+# cache_path = "./data/cert"
