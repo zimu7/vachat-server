@@ -1,5 +1,3 @@
-webclient_url = ""
-
 [system]
 data_dir = "./data"
 wwwroot_dir = "./wwwroot"
@@ -9,7 +7,7 @@ log_level = "debug"
 
 [network]
 bind = "0.0.0.0:3000"
-# domain = "your-domain-name"
+domain = "your-domain-name"
 matrix_domain= "localhost"
 frontend_url = "http://127.0.0.1:3000"
 enable_swagger = true
@@ -19,9 +17,9 @@ enable_swagger = true
 
 # [network.tls]
 # type = "certificate"
-# cert = "...."
-# key = "...."
-# path = "./cert/"
+# cert_path = "./config/cert/fullchain.pem"
+# key_path = "./config/cert/privkey.pem"
+# path = "./config/cert/"
 
 # [network.tls]
 # type = "acme_http_01"
