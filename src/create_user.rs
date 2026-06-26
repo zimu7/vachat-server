@@ -17,11 +17,6 @@ pub enum CreateUserBy<'a> {
         email: &'a str,
         password: &'a str,
     },
-    OpenIdConnect {
-        issuer: &'a str,
-        subject: &'a str,
-        email: Option<&'a str>,
-    },
 }
 
 impl<'a> CreateUserBy<'a> {
@@ -29,7 +24,6 @@ impl<'a> CreateUserBy<'a> {
         match self {
             CreateUserBy::Guest => "guest",
             CreateUserBy::Password { .. } => "password",
-            CreateUserBy::OpenIdConnect { .. } => "oidc",
         }
     }
 
@@ -37,7 +31,6 @@ impl<'a> CreateUserBy<'a> {
         match self {
             CreateUserBy::Guest => None,
             CreateUserBy::Password { email, .. } => Some(*email),
-            CreateUserBy::OpenIdConnect { email, .. } => *email,
         }
     }
 
@@ -45,7 +38,6 @@ impl<'a> CreateUserBy<'a> {
         match self {
             CreateUserBy::Guest => None,
             CreateUserBy::Password { password, .. } => Some(*password),
-            CreateUserBy::OpenIdConnect { .. } => None,
         }
     }
 }
@@ -91,13 +83,6 @@ impl<'a> CreateUser<'a> {
     pub fn language(self, language: &'a LangId) -> Self {
         Self {
             language: Some(language),
-            ..self
-        }
-    }
-
-    pub fn avatar(self, avatar: &'a [u8]) -> Self {
-        Self {
-            avatar: Some(avatar),
             ..self
         }
     }
@@ -182,23 +167,6 @@ impl State {
 
         if let Some(avatar) = create_user.avatar {
             let _ = self.save_avatar(uid, avatar);
-        }
-
-        match &create_user.create_by {
-            CreateUserBy::OpenIdConnect {
-                issuer, subject, ..
-            } => {
-                // insert into openid_connect
-                let sql = "insert into openid_connect (issuer, subject, uid) values (?, ?, ?)";
-                sqlx::query(sql)
-                    .bind(issuer)
-                    .bind(subject)
-                    .bind(uid)
-                    .execute(&mut tx)
-                    .await
-                    .map_err(InternalServerError)?;
-            }
-            _ => {}
         }
 
         let log_id = if !is_guest {

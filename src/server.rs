@@ -117,7 +117,6 @@ pub async fn create_state(config_path: &Path, config: Arc<Config>) -> Result<Sta
             users,
         })),
         event_sender: Arc::new(broadcast::channel(128).0),
-        pending_oidc: Default::default(),
         msg_updated_channel: Arc::new(msg_updated_tx),
         bot_online_tx: Arc::new(bot_online_tx),
         device_keys_manager,

@@ -11,7 +11,6 @@ use chrono::{NaiveDate, Utc};
 use futures_util::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use num_enum::{FromPrimitive, IntoPrimitive};
-use openidconnect::{core::CoreClient, CsrfToken, Nonce, PkceCodeVerifier};
 use poem::{
     error::{BadRequest, InternalServerError},
     http::StatusCode,
@@ -21,7 +20,7 @@ use rc_msgdb::MsgDb;
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::SqlitePool;
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use walkdir::WalkDir;
 
 use crate::{
@@ -367,14 +366,6 @@ impl Cache {
     }
 }
 
-pub struct OAuth2State {
-    pub client: CoreClient,
-    pub issuer: String,
-    pub pkce_verifier: PkceCodeVerifier,
-    pub csrf_token: CsrfToken,
-    pub nonce: Nonce,
-}
-
 pub trait DynamicConfig: Serialize + DeserializeOwned + Default {
     type Instance: Send + Sync + 'static;
 
@@ -398,7 +389,6 @@ pub struct State {
     pub msg_db: Arc<MsgDb>,
     pub cache: Arc<RwLock<Cache>>,
     pub event_sender: Arc<broadcast::Sender<Arc<BroadcastEvent>>>,
-    pub pending_oidc: Arc<Mutex<HashMap<String, OAuth2State>>>,
     pub msg_updated_channel: Arc<mpsc::UnboundedSender<i64>>,
     /// Channel to notify bot to go offline (uid, should_go_online)
     pub bot_online_tx: Arc<mpsc::UnboundedSender<(i64, bool)>>,

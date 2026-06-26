@@ -76,7 +76,6 @@ impl TestServer {
                     who_can_sign_up: WhoCanSignUp::EveryOne,
                     guest: true,
                     password: true,
-                    oidc: vec![],
                 },
             })
             .await

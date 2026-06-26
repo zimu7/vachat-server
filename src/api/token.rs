@@ -1,21 +1,6 @@
-use std::{ops::Deref, time::Duration};
+use std::ops::Deref;
 
-use bytes::Bytes;
-use futures_util::TryFutureExt;
-use openidconnect::{
-    core::{
-        CoreAuthenticationFlow, CoreClient, CoreClientRegistrationRequest, CoreIdTokenClaims,
-        CoreIdTokenVerifier, CoreJwsSigningAlgorithm, CoreProviderMetadata,
-    },
-    registration::EmptyAdditionalClientMetadata,
-    AuthorizationCode, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge, RedirectUrl, Scope,
-};
-use poem::{
-    error::{BadRequest, InternalServerError, ServiceUnavailable},
-    http::StatusCode,
-    web::Data,
-    Error, Request, Result,
-};
+use poem::{error::InternalServerError, http::StatusCode, web::Data, Error, Request, Result};
 use poem_openapi::{
     auth::ApiKey, payload::Json, types::Example, ApiResponse, Object, OpenApi,
     SecurityScheme, Union,
@@ -25,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     api::{
-        admin_login::{LoginConfig, WhoCanSignUp},
+        admin_login::LoginConfig,
         tags::ApiTags,
         user::UserInfo,
         DateTime, KickReason,
@@ -33,7 +18,7 @@ use crate::{
     create_user::{CreateUser, CreateUserBy},
     middleware::guest_forbidden,
     password::verify_password,
-    state::{CacheDevice, OAuth2State, UserEvent, UserStatus},
+    state::{CacheDevice, UserEvent, UserStatus},
     State,
 };
 
@@ -101,21 +86,12 @@ struct LoginCredentialPassword {
     password: String,
 }
 
-#[derive(Debug, Object)]
-struct LoginCredentialOpenIdConnect {
-    code: String,
-    #[oai(rename = "state")]
-    oidc_state: String,
-}
-
 /// Login credential
 #[derive(Debug, Union)]
 #[oai(discriminator_name = "type")]
 enum LoginCredential {
     #[oai(mapping = "password")]
     Password(LoginCredentialPassword),
-    #[oai(mapping = "oidc")]
-    OpenIdConnect(LoginCredentialOpenIdConnect),
 }
 
 /// Login request
@@ -190,38 +166,10 @@ pub enum LoginApiResponse {
     AccountNotAssociated,
 }
 
-/// Bind credential
-#[derive(Debug, Union)]
-#[oai(discriminator_name = "type")]
-enum BindCredential {
-    #[oai(mapping = "oidc")]
-    OpenIdConnect(LoginCredentialOpenIdConnect),
-}
-
-/// Bind request
-#[derive(Debug, Object)]
-struct BindRequest {
-    /// Credential
-    credential: BindCredential,
-}
-
-#[derive(ApiResponse)]
-enum BindApiResponse {
-    /// Login success
-    #[oai(status = 200)]
-    Ok,
-    /// Invalid credential
-    #[oai(status = 401)]
-    InvalidCredential,
-    #[oai(status = 409)]
-    Exists,
-}
-
 /// Credentials response
 #[derive(Debug, Object)]
 struct CredentialsResponse {
     password: bool,
-    oidc: Vec<String>,
 }
 
 /// Renew token request
@@ -262,17 +210,6 @@ enum LogoutApiResponse {
     IllegalToken,
 }
 
-#[derive(Debug, Object)]
-struct OpenIdAuthorizeRequest {
-    issuer: String,
-    redirect_uri: String,
-}
-
-#[derive(Debug, Object)]
-struct OpenIdAuthorizeResponse {
-    url: String,
-}
-
 /// Update device token request
 #[derive(Debug, Object)]
 struct UpdateDeviceTokenRequest {
@@ -283,125 +220,6 @@ pub struct ApiToken;
 
 #[OpenApi(prefix_path = "/token", tag = "ApiTags::Token")]
 impl ApiToken {
-    /// OpenId authorize
-    #[oai(path = "/openid/authorize", method = "post")]
-    async fn openid_authorize(
-        &self,
-        state: Data<&State>,
-        req: Json<OpenIdAuthorizeRequest>,
-    ) -> Result<Json<OpenIdAuthorizeResponse>> {
-        let mut provider_metadata = None;
-        let login_cfg = state
-            .get_dynamic_config_instance::<LoginConfig>()
-            .await
-            .unwrap_or_default();
-        if !login_cfg
-            .oidc
-            .iter()
-            .any(|oidc| oidc.domain == req.issuer && oidc.enable)
-        {
-            return Err(Error::from_status(StatusCode::FORBIDDEN));
-        }
-
-        for url in [
-            format!("https://{}", req.0.issuer),
-            format!("https://{}/", req.0.issuer),
-        ] {
-            let issuer_url = IssuerUrl::new(url).map_err(BadRequest)?;
-            if let Ok(metadata) = CoreProviderMetadata::discover_async(
-                issuer_url.clone(),
-                openidconnect::reqwest::async_http_client,
-            )
-            .await
-            {
-                provider_metadata = Some((issuer_url, metadata));
-                break;
-            }
-        }
-
-        let (issuer_url, provider_metadata) =
-            provider_metadata.ok_or_else(|| Error::from_status(StatusCode::SERVICE_UNAVAILABLE))?;
-        let redirect_uri = RedirectUrl::new(req.0.redirect_uri).map_err(BadRequest)?;
-
-        let registration_endpoint = provider_metadata
-            .registration_endpoint()
-            .ok_or_else(|| Error::from_status(StatusCode::SERVICE_UNAVAILABLE))?;
-        tracing::debug!(
-            issuer_url = issuer_url.as_str(),
-            redirect_uri = redirect_uri.as_str(),
-            registration_endpoint = registration_endpoint.as_str(),
-            "registration endpoint",
-        );
-
-        let registration_response = CoreClientRegistrationRequest::new(
-            vec![redirect_uri.clone()],
-            EmptyAdditionalClientMetadata::default(),
-        )
-        .register_async(
-            registration_endpoint,
-            openidconnect::reqwest::async_http_client,
-        )
-        .await
-        .map_err(ServiceUnavailable)?;
-
-        tracing::debug!(
-            issuer_url = issuer_url.as_str(),
-            redirect_uri = redirect_uri.as_str(),
-            "openid authorize",
-        );
-
-        let client = CoreClient::new(
-            registration_response.client_id().clone(),
-            registration_response.client_secret().cloned(),
-            provider_metadata.issuer().clone(),
-            provider_metadata.authorization_endpoint().clone(),
-            provider_metadata.token_endpoint().cloned(),
-            provider_metadata.userinfo_endpoint().cloned(),
-            provider_metadata.jwks().clone(),
-        )
-        .set_redirect_uri(redirect_uri);
-
-        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-        let (auth_url, csrf_token, nonce) = client
-            .authorize_url(
-                CoreAuthenticationFlow::AuthorizationCode,
-                CsrfToken::new_random,
-                Nonce::new_random,
-            )
-            .add_scope(Scope::new("openid".to_string()))
-            .set_pkce_challenge(pkce_challenge)
-            .url();
-
-        tracing::debug!(
-            authorize_url = auth_url.as_str(),
-            "authorization url generated"
-        );
-
-        state.pending_oidc.lock().await.insert(
-            csrf_token.secret().to_string(),
-            OAuth2State {
-                client,
-                issuer: req.0.issuer,
-                pkce_verifier,
-                csrf_token: csrf_token.clone(),
-                nonce,
-            },
-        );
-
-        tokio::spawn({
-            let state = state.clone();
-            async move {
-                // timeout
-                tokio::time::sleep(Duration::from_secs(150)).await;
-                state.pending_oidc.lock().await.remove(csrf_token.secret());
-            }
-        });
-
-        Ok(Json(OpenIdAuthorizeResponse {
-            url: auth_url.to_string(),
-        }))
-    }
-
     /// Login as guest
     #[oai(path = "/login_guest", method = "get")]
     async fn login_guest(&self, state: Data<&State>) -> Result<LoginApiResponse> {
@@ -436,8 +254,6 @@ impl ApiToken {
             .await
             .unwrap_or_default();
 
-        let can_register = !matches!(login_cfg.who_can_sign_up, WhoCanSignUp::InvitationOnly);
-
         let uid = match req.0.credential {
             // login with password
             LoginCredential::Password(LoginCredentialPassword { account, password })
@@ -466,155 +282,10 @@ impl ApiToken {
                 };
                 uid
             }
-
-            // login with open id connect
-            LoginCredential::OpenIdConnect(LoginCredentialOpenIdConnect {
-                code,
-                oidc_state,
-                ..
-            }) => {
-                let item = {
-                    let mut pending_oidc = state.pending_oidc.lock().await;
-                    match pending_oidc.remove(&oidc_state) {
-                        Some(item) => item,
-                        None => {
-                            tracing::debug!("oidc id does not exist");
-                            return Ok(LoginApiResponse::InvalidAccount);
-                        }
-                    }
-                };
-
-                tracing::debug!("wait for oauth2 response");
-
-                let issuer = item.issuer.clone();
-                let id_token = match oidc_get_id_token(item, code, oidc_state).await {
-                    Ok(id_token) => id_token,
-                    Err(_) => return Ok(LoginApiResponse::InvalidAccount),
-                };
-
-                let subject = id_token.subject().to_string();
-                let email = if id_token.email_verified().unwrap_or_default() {
-                    id_token.email().map(|email| email.to_string())
-                } else {
-                    None
-                };
-                let name = id_token
-                    .name()
-                    .and_then(|name| name.iter().next().map(|(_, name)| name.to_string()));
-                let picture = id_token.picture().and_then(|picture| {
-                    picture
-                        .iter()
-                        .next()
-                        .map(|(_, picture)| picture.to_string())
-                });
-
-                let sql = "select uid from openid_connect where issuer = ? and subject = ?";
-                match sqlx::query_as::<_, (i64,)>(sql)
-                    .bind(&issuer)
-                    .bind(&subject)
-                    .fetch_optional(&state.db_pool)
-                    .await
-                    .map_err(InternalServerError)?
-                {
-                    Some((uid,)) => uid,
-                    // create a new user
-                    None => {
-                        if !can_register {
-                            return Ok(LoginApiResponse::AccountNotAssociated);
-                        }
-
-                        // download avatar
-                        let avatar = match &picture {
-                            Some(url) => download_avatar(url).await.ok(),
-                            None => None,
-                        };
-
-                        let name = state
-                            .cache
-                            .write()
-                            .await
-                            .assign_username(name.as_deref(), email.as_deref());
-
-                        let mut create_user = CreateUser::new(
-                            &name,
-                            CreateUserBy::OpenIdConnect {
-                                issuer: &issuer,
-                                subject: &subject,
-                                email: email.as_deref(),
-                            },
-                            false,
-                        );
-                        if let Some(avatar) = &avatar {
-                            create_user = create_user.avatar(avatar);
-                        }
-
-                        match state.create_user(create_user).await {
-                            Ok((uid, _)) => uid,
-                            Err(_) => return Ok(LoginApiResponse::InvalidAccount),
-                        }
-                    }
-                }
-            }
             _ => return Ok(LoginApiResponse::LoginMethodNotSupported),
         };
 
         do_login(&state, uid, &req.0.device, req.0.device_token.as_deref()).await
-    }
-
-    /// Bind credential
-    #[oai(path = "/bind", method = "post", transform = "guest_forbidden")]
-    async fn bind(
-        &self,
-        state: Data<&State>,
-        token: Token,
-        req: Json<BindRequest>,
-    ) -> Result<BindApiResponse> {
-        let _login_cfg = state
-            .get_dynamic_config_instance::<LoginConfig>()
-            .await
-            .unwrap_or_default();
-
-        let BindCredential::OpenIdConnect(LoginCredentialOpenIdConnect {
-            code, oidc_state, ..
-        }) = req.0.credential;
-
-        let item = {
-            let mut pending_oidc = state.pending_oidc.lock().await;
-            match pending_oidc.remove(&oidc_state) {
-                Some(item) => item,
-                None => {
-                    tracing::debug!("oidc id does not exist");
-                    return Ok(BindApiResponse::InvalidCredential);
-                }
-            }
-        };
-
-        if get_credentials_openid(&state, token.uid)
-            .await?
-            .iter()
-            .any(|issuer| &item.issuer == issuer)
-        {
-            return Ok(BindApiResponse::Exists);
-        }
-
-        tracing::debug!("wait for oauth2 response");
-
-        let issuer = item.issuer.clone();
-        let id_token = match oidc_get_id_token(item, code, oidc_state).await {
-            Ok(id_token) => id_token,
-            Err(_) => return Ok(BindApiResponse::InvalidCredential),
-        };
-
-        let sql = "insert into openid_connect (issuer, subject, uid) values (?, ?, ?)";
-        sqlx::query(sql)
-            .bind(&issuer)
-            .bind(id_token.subject().as_str())
-            .bind(token.uid)
-            .execute(&state.db_pool)
-            .await
-            .map_err(InternalServerError)?;
-
-        Ok(BindApiResponse::Ok)
     }
 
     /// Get the credentials of current user
@@ -632,7 +303,6 @@ impl ApiToken {
 
         Ok(Json(CredentialsResponse {
             password: cached_user.password.is_some(),
-            oidc: get_credentials_openid(&state, token.uid).await?,
         }))
     }
 
@@ -864,76 +534,6 @@ pub async fn do_login(
         expired_in: state.config.system.token_expiry_seconds,
         user: cached_user.api_user_info(uid),
     })))
-}
-
-async fn download_avatar(url: &str) -> anyhow::Result<Bytes> {
-    Ok(reqwest::get(url)
-        .and_then(|resp| async move { resp.error_for_status() })
-        .and_then(|resp| resp.bytes())
-        .await?)
-}
-
-async fn oidc_get_id_token(
-    item: OAuth2State,
-    code: String,
-    state: String,
-) -> anyhow::Result<CoreIdTokenClaims> {
-    let code = AuthorizationCode::new(code);
-
-    anyhow::ensure!(&state == item.csrf_token.secret(), "invalid csrf token");
-
-    // Exchange the code with a token.
-    let token_response = match item
-        .client
-        .exchange_code(code)
-        .set_pkce_verifier(item.pkce_verifier)
-        .request_async(openidconnect::reqwest::async_http_client)
-        .await
-    {
-        Ok(token_response) => token_response,
-        Err(err) => {
-            tracing::debug!(error = %err, "failed to exchange the code with a token");
-            return Err(err.into());
-        }
-    };
-
-    let id_token_verifier: CoreIdTokenVerifier = item
-        .client
-        .id_token_verifier()
-        .set_other_audience_verifier_fn(|aud| aud.as_str() == "solid")
-        .set_allowed_algs(vec![
-            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
-            CoreJwsSigningAlgorithm::EcdsaP256Sha256,
-        ]);
-    let id_token = match token_response.extra_fields().id_token() {
-        Some(id_token) => id_token,
-        None => {
-            tracing::debug!("id token does not exist");
-            anyhow::bail!("expect id token");
-        }
-    };
-    let id_token_claims: &CoreIdTokenClaims = match id_token.claims(&id_token_verifier, &item.nonce)
-    {
-        Ok(id_token_claims) => id_token_claims,
-        Err(err) => {
-            tracing::debug!(error = %err, "failed to verify claims");
-            return Err(err.into());
-        }
-    };
-
-    tracing::debug!("success get id token");
-    Ok(id_token_claims.clone())
-}
-
-async fn get_credentials_openid(state: &State, uid: i64) -> anyhow::Result<Vec<String>> {
-    let sql = "select issuer from openid_connect where uid = ?";
-    Ok(sqlx::query_as::<_, (String,)>(sql)
-        .bind(uid)
-        .fetch_all(&state.db_pool)
-        .await?
-        .into_iter()
-        .map(|(issuer,)| issuer)
-        .collect())
 }
 
 #[cfg(test)]

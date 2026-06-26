@@ -11,13 +11,6 @@ use crate::{
 
 pub struct ApiAdminLogin;
 
-#[derive(Debug, Object, Serialize, Deserialize)]
-pub struct OIDCConfig {
-    pub enable: bool,
-    pub favicon: String,
-    pub domain: String,
-}
-
 #[derive(Debug, Enum, Serialize, Deserialize, Eq, PartialEq, Copy, Clone)]
 pub enum WhoCanSignUp {
     EveryOne,
@@ -36,9 +29,6 @@ pub struct LoginConfig {
     /// Login with password
     #[serde(default)]
     pub password: bool,
-    /// Login with OpenID Connect
-    #[serde(default)]
-    pub oidc: Vec<OIDCConfig>,
 }
 
 const fn default_who_can_sign_up() -> WhoCanSignUp {
@@ -51,7 +41,6 @@ impl Default for LoginConfig {
             who_can_sign_up: WhoCanSignUp::EveryOne,
             guest: false,
             password: true,
-            oidc: vec![],
         }
     }
 }

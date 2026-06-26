@@ -290,18 +290,6 @@ CREATE TABLE "mute" (
 );
 
 -- ----------------------------
--- Table structure for openid_connect
--- ----------------------------
-DROP TABLE IF EXISTS "openid_connect";
-CREATE TABLE "openid_connect" (
-  "issuer" text NOT NULL,
-  "subject" text NOT NULL,
-  "uid" integer NOT NULL,
-  PRIMARY KEY ("issuer", "subject"),
-  FOREIGN KEY ("uid") REFERENCES "user" ("uid") ON DELETE CASCADE ON UPDATE NO ACTION
-);
-
--- ----------------------------
 -- Table structure for pinned_chat
 -- ----------------------------
 DROP TABLE IF EXISTS "pinned_chat";
@@ -593,14 +581,6 @@ CREATE UNIQUE INDEX "mute_uid_uid"
 ON "mute" (
   "uid" ASC,
   "mute_uid" ASC
-);
-
--- ----------------------------
--- Indexes structure for table openid_connect
--- ----------------------------
-CREATE UNIQUE INDEX "openid_connect_uid"
-ON "openid_connect" (
-  "uid" ASC
 );
 
 -- ----------------------------
