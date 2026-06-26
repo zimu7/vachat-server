@@ -1,9 +1,7 @@
 use std::{ops::Deref, time::Duration};
 
 use bytes::Bytes;
-use chrono::Utc;
 use futures_util::TryFutureExt;
-use hmac::{Mac, NewMac};
 use openidconnect::{
     core::{
         CoreAuthenticationFlow, CoreClient, CoreClientRegistrationRequest, CoreIdTokenClaims,
@@ -19,12 +17,11 @@ use poem::{
     Error, Request, Result,
 };
 use poem_openapi::{
-    auth::ApiKey, param::Header, payload::Json, types::Example, ApiResponse, Object, OpenApi,
+    auth::ApiKey, payload::Json, types::Example, ApiResponse, Object, OpenApi,
     SecurityScheme, Union,
 };
 use rc_token::{parse_token, TokenType};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 
 use crate::{
     api::{
@@ -111,11 +108,6 @@ struct LoginCredentialOpenIdConnect {
     oidc_state: String,
 }
 
-#[derive(Debug, Object)]
-struct LoginCredentialThirdParty {
-    key: String,
-}
-
 /// Login credential
 #[derive(Debug, Union)]
 #[oai(discriminator_name = "type")]
@@ -124,8 +116,6 @@ enum LoginCredential {
     Password(LoginCredentialPassword),
     #[oai(mapping = "oidc")]
     OpenIdConnect(LoginCredentialOpenIdConnect),
-    #[oai(mapping = "thirdparty")]
-    ThirdParty(LoginCredentialThirdParty),
 }
 
 /// Login request
@@ -220,10 +210,6 @@ enum BindApiResponse {
     /// Login success
     #[oai(status = 200)]
     Ok,
-    /// Login method does not supported
-    #[oai(status = 403)]
-    #[allow(dead_code)]
-    LoginMethodNotSupported,
     /// Invalid credential
     #[oai(status = 401)]
     InvalidCredential,
@@ -285,19 +271,6 @@ struct OpenIdAuthorizeRequest {
 #[derive(Debug, Object)]
 struct OpenIdAuthorizeResponse {
     url: String,
-}
-
-#[derive(Debug, Object)]
-struct CreateThirdPartyKeyRequest {
-    userid: String,
-    username: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ThirdPartyLoginInfo {
-    userid: String,
-    username: String,
-    expired_at: chrono::DateTime<Utc>,
 }
 
 /// Update device token request
@@ -427,35 +400,6 @@ impl ApiToken {
         Ok(Json(OpenIdAuthorizeResponse {
             url: auth_url.to_string(),
         }))
-    }
-
-    /// Create a key for third-party user login.
-    #[oai(method = "post", path = "/create_third_party_key")]
-    async fn create_third_party_key(
-        &self,
-        state: Data<&State>,
-        req: Json<CreateThirdPartyKeyRequest>,
-        #[oai(name = "X-SECRET")] secret: Header<String>,
-    ) -> Result<Json<String>> {
-        let key_config = state.key_config.read().await;
-        if secret.0 != key_config.third_party_secret {
-            return Err(Error::from_status(StatusCode::FORBIDDEN));
-        }
-
-        let info = ThirdPartyLoginInfo {
-            userid: req.0.userid,
-            username: req.0.username,
-            expired_at: chrono::Utc::now() + chrono::Duration::seconds(60 * 2),
-        };
-        let key_content = serde_json::to_vec(&info).unwrap();
-        let mut buf_sig = {
-            let mut mac =
-                hmac::Hmac::<Sha256>::new_from_slice(key_config.server_key.as_bytes()).unwrap();
-            mac.update(&key_content);
-            mac.finalize().into_bytes().to_vec()
-        };
-        buf_sig.extend_from_slice(&key_content);
-        Ok(Json(hex::encode(&buf_sig)))
     }
 
     /// Login as guest
@@ -604,59 +548,6 @@ impl ApiToken {
                             create_user = create_user.avatar(avatar);
                         }
 
-                        match state.create_user(create_user).await {
-                            Ok((uid, _)) => uid,
-                            Err(_) => return Ok(LoginApiResponse::InvalidAccount),
-                        }
-                    }
-                }
-            }
-
-            LoginCredential::ThirdParty(LoginCredentialThirdParty { key })
-                if login_cfg.third_party =>
-            {
-                let data = match hex::decode(&key) {
-                    Ok(data) => data,
-                    Err(_) => return Ok(LoginApiResponse::InvalidAccount),
-                };
-                let key_config = state.key_config.read().await;
-                let mut mac =
-                    hmac::Hmac::<Sha256>::new_from_slice(key_config.server_key.as_bytes()).unwrap();
-                mac.update(&data[32..]);
-                if mac.verify(&data[..32]).is_err() {
-                    return Ok(LoginApiResponse::InvalidAccount);
-                }
-                let info: ThirdPartyLoginInfo = match serde_json::from_slice(&data[32..]) {
-                    Ok(info) => info,
-                    Err(_) => return Ok(LoginApiResponse::InvalidAccount),
-                };
-                if info.expired_at < Utc::now() {
-                    return Ok(LoginApiResponse::InvalidAccount);
-                }
-
-                let sql = "select uid from third_party_users where userid = ?";
-                match sqlx::query_as::<_, (i64,)>(sql)
-                    .bind(&info.userid)
-                    .fetch_optional(&state.db_pool)
-                    .await
-                    .map_err(InternalServerError)?
-                {
-                    Some((uid,)) => uid,
-                    // create a new user
-                    None => {
-                        let name = state
-                            .cache
-                            .write()
-                            .await
-                            .assign_username(Some(&info.username), None);
-                        let create_user = CreateUser::new(
-                            &name,
-                            CreateUserBy::ThirdParty {
-                                thirdparty_uid: &info.userid,
-                                username: &info.username,
-                            },
-                            false,
-                        );
                         match state.create_user(create_user).await {
                             Ok((uid, _)) => uid,
                             Err(_) => return Ok(LoginApiResponse::InvalidAccount),
@@ -1295,74 +1186,5 @@ mod tests {
         .map(|(t,)| t)
         .unwrap();
         assert_eq!(device_token2, None);
-    }
-
-    #[tokio::test]
-    async fn test_login_with_third_party() {
-        let server = TestServer::new().await;
-
-        let resp = server
-            .post("/api/token/create_third_party_key")
-            .body_json(&json!({
-                "userid": "u1",
-                "username": "usertest"
-            }))
-            .header(
-                "X-SECRET",
-                &server.state().key_config.read().await.third_party_secret,
-            )
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        let key = resp.json().await.value().string().to_string();
-
-        let resp = server
-            .post("/api/token/login")
-            .body_json(&json!({
-                "credential": {
-                    "type": "thirdparty",
-                    "key": key,
-                }
-            }))
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        let json = resp.json().await;
-        let obj = json.value().object();
-        let user = obj.get("user").object();
-        user.get("name").assert_string("usertest");
-        let uid1 = user.get("uid").i64();
-
-        let resp = server
-            .post("/api/token/create_third_party_key")
-            .body_json(&json!({
-                "userid": "u1",
-                "username": "usertest"
-            }))
-            .header(
-                "X-SECRET",
-                &server.state().key_config.read().await.third_party_secret,
-            )
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        let key = resp.json().await.value().string().to_string();
-
-        let resp = server
-            .post("/api/token/login")
-            .body_json(&json!({
-                "credential": {
-                    "type": "thirdparty",
-                    "key": key,
-                }
-            }))
-            .send()
-            .await;
-        let json = resp.json().await;
-        let obj = json.value().object();
-        let user = obj.get("user").object();
-        let uid2 = user.get("uid").i64();
-
-        assert_eq!(uid1, uid2);
     }
 }

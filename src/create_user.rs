@@ -22,11 +22,6 @@ pub enum CreateUserBy<'a> {
         subject: &'a str,
         email: Option<&'a str>,
     },
-    ThirdParty {
-        thirdparty_uid: &'a str,
-        #[allow(dead_code)]
-        username: &'a str,
-    },
 }
 
 impl<'a> CreateUserBy<'a> {
@@ -35,7 +30,6 @@ impl<'a> CreateUserBy<'a> {
             CreateUserBy::Guest => "guest",
             CreateUserBy::Password { .. } => "password",
             CreateUserBy::OpenIdConnect { .. } => "oidc",
-            CreateUserBy::ThirdParty { .. } => "thirdparty",
         }
     }
 
@@ -44,7 +38,6 @@ impl<'a> CreateUserBy<'a> {
             CreateUserBy::Guest => None,
             CreateUserBy::Password { email, .. } => Some(*email),
             CreateUserBy::OpenIdConnect { email, .. } => *email,
-            CreateUserBy::ThirdParty { .. } => None,
         }
     }
 
@@ -53,7 +46,6 @@ impl<'a> CreateUserBy<'a> {
             CreateUserBy::Guest => None,
             CreateUserBy::Password { password, .. } => Some(*password),
             CreateUserBy::OpenIdConnect { .. } => None,
-            CreateUserBy::ThirdParty { .. } => None,
         }
     }
 }
@@ -201,15 +193,6 @@ impl State {
                 sqlx::query(sql)
                     .bind(issuer)
                     .bind(subject)
-                    .bind(uid)
-                    .execute(&mut tx)
-                    .await
-                    .map_err(InternalServerError)?;
-            }
-            CreateUserBy::ThirdParty { thirdparty_uid, .. } => {
-                let sql = "insert into third_party_users (userid, uid) values (?, ?)";
-                sqlx::query(sql)
-                    .bind(thirdparty_uid)
                     .bind(uid)
                     .execute(&mut tx)
                     .await

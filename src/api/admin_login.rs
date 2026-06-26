@@ -39,9 +39,6 @@ pub struct LoginConfig {
     /// Login with OpenID Connect
     #[serde(default)]
     pub oidc: Vec<OIDCConfig>,
-    /// Login with third party
-    #[serde(default)]
-    pub third_party: bool,
 }
 
 const fn default_who_can_sign_up() -> WhoCanSignUp {
@@ -55,7 +52,6 @@ impl Default for LoginConfig {
             guest: false,
             password: true,
             oidc: vec![],
-            third_party: false,
         }
     }
 }

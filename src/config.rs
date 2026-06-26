@@ -14,7 +14,6 @@ use crate::api::LangId;
 pub struct KeyConfig {
     pub server_id: String,
     pub server_key: String,
-    pub third_party_secret: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,8 +22,6 @@ pub struct Config {
     pub network: NetworkConfig,
     #[serde(default, rename = "user")]
     pub users: Vec<UserConfig>,
-    #[allow(dead_code)]
-    pub webclient_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,9 +35,6 @@ pub struct SystemConfig {
     pub refresh_token_expiry_seconds: i64,
     #[serde(default = "default_upload_avatar_limit")]
     pub upload_avatar_limit: usize,
-    #[serde(default = "default_send_image_limit")]
-    #[allow(dead_code)]
-    pub send_image_limit: usize,
     #[serde(default = "default_upload_timeout_seconds")]
     pub upload_timeout_seconds: i64,
     #[serde(default = "default_file_expiry_days")]
@@ -62,10 +56,6 @@ const fn default_refresh_token_expiry_seconds() -> i64 {
 
 const fn default_upload_avatar_limit() -> usize {
     1024 * 1024
-}
-
-const fn default_send_image_limit() -> usize {
-    1024 * 1024 * 2
 }
 
 const fn default_upload_timeout_seconds() -> i64 {
@@ -121,13 +111,6 @@ impl SystemConfig {
         self.wwwroot_dir
             .clone()
             .unwrap_or_else(|| self.data_dir.join("wwwroot"))
-    }
-
-    #[allow(dead_code)]
-    pub fn temp_wwwroot_dir(&self) -> PathBuf {
-        self.wwwroot_dir
-            .clone()
-            .unwrap_or_else(|| self.data_dir.join("wwwroot.temp"))
     }
 
     pub fn favorite_dir(&self, uid: i64) -> PathBuf {

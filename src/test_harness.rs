@@ -50,7 +50,6 @@ impl TestServer {
                 token_expiry_seconds: 60,
                 refresh_token_expiry_seconds: 60 * 60,
                 upload_avatar_limit: 1024 * 1024,
-                send_image_limit: 1024 * 1024,
                 upload_timeout_seconds: 300,
                 file_expiry_days: 30 * 3,
                 max_favorite_archives: 100,
@@ -65,7 +64,6 @@ impl TestServer {
                 matrix_domain: None,
             },
             users: vec![],
-            webclient_url: None,
         };
         f(&mut cfg);
         let state = crate::server::create_state(tempdir.path(), Arc::new(cfg))
@@ -79,7 +77,6 @@ impl TestServer {
                     guest: true,
                     password: true,
                     oidc: vec![],
-                    third_party: true,
                 },
             })
             .await

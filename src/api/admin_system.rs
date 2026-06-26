@@ -17,7 +17,6 @@ use crate::{
     },
     config::Config,
     create_user::{CreateUser, CreateUserBy},
-    server::create_random_str,
     state::{DynamicConfig, DynamicConfigEntry},
     State,
 };
@@ -336,45 +335,6 @@ impl ApiAdminSystem {
         logo.save_with_format(path, ImageFormat::Png)
             .map_err(InternalServerError)?;
         Ok(())
-    }
-
-    /// Get the secret for third-party authentication
-    #[oai(path = "/third_party_secret", method = "get")]
-    async fn third_party_secret(
-        &self,
-        state: Data<&State>,
-        token: Token,
-    ) -> Result<PlainText<String>> {
-        if !token.is_admin {
-            return Err(Error::from_status(StatusCode::FORBIDDEN));
-        }
-        let key_config = state.key_config.read().await;
-        Ok(PlainText(key_config.third_party_secret.clone()))
-    }
-
-    /// Update third-party secret
-    #[oai(path = "/third_party_secret", method = "post")]
-    async fn update_third_party_secret(
-        &self,
-        state: Data<&State>,
-        token: Token,
-    ) -> Result<PlainText<String>> {
-        if !token.is_admin {
-            return Err(Error::from_status(StatusCode::FORBIDDEN));
-        }
-
-        let mut key_config = state.key_config.write().await;
-        let new_third_party_secret = create_random_str(32);
-        key_config.third_party_secret = new_third_party_secret.clone();
-
-        let key_config_path = state.config.system.data_dir.join("key.json");
-        std::fs::write(
-            key_config_path,
-            serde_json::to_vec(&*key_config).map_err(InternalServerError)?,
-        )
-        .map_err(InternalServerError)?;
-
-        Ok(PlainText(new_third_party_secret))
     }
 
     /// Get the frontend url

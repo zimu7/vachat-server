@@ -400,8 +400,6 @@ pub struct State {
     pub event_sender: Arc<broadcast::Sender<Arc<BroadcastEvent>>>,
     pub pending_oidc: Arc<Mutex<HashMap<String, OAuth2State>>>,
     pub msg_updated_channel: Arc<mpsc::UnboundedSender<i64>>,
-    #[allow(dead_code)]
-    pub invalid_device_tokens: Arc<parking_lot::Mutex<HashSet<String>>>,
     /// Channel to notify bot to go offline (uid, should_go_online)
     pub bot_online_tx: Arc<mpsc::UnboundedSender<(i64, bool)>>,
     /// E2EE device keys manager

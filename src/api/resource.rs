@@ -52,18 +52,6 @@ pub struct FileMeta {
     pub filename: Option<String>,
 }
 
-/// Download file request
-#[derive(Debug, Object)]
-#[allow(dead_code)]
-struct DownloadFileRequest {
-    #[oai(default)]
-    file_id: String,
-    #[oai(default)]
-    chunk_start: i64,
-    #[oai(default)]
-    chunk_len: i64,
-}
-
 /// Image properties
 #[derive(Debug, Object)]
 pub struct ImageProperties {

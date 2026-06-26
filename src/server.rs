@@ -48,7 +48,6 @@ pub async fn create_state(config_path: &Path, config: Arc<Config>) -> Result<Sta
         let cfg = KeyConfig {
             server_id: create_random_str(32),
             server_key: create_random_str(32),
-            third_party_secret: create_random_str(32),
         };
         std::fs::write(&key_config_path, serde_json::to_vec(&cfg)?)?;
         key_config = Some(cfg);
@@ -120,7 +119,6 @@ pub async fn create_state(config_path: &Path, config: Arc<Config>) -> Result<Sta
         event_sender: Arc::new(broadcast::channel(128).0),
         pending_oidc: Default::default(),
         msg_updated_channel: Arc::new(msg_updated_tx),
-        invalid_device_tokens: Default::default(),
         bot_online_tx: Arc::new(bot_online_tx),
         device_keys_manager,
         room_encryption_manager,
@@ -465,7 +463,6 @@ mod tests {
                 token_expiry_seconds: 60 * 60,
                 refresh_token_expiry_seconds: 60 * 60,
                 upload_avatar_limit: 1024 * 1024,
-                send_image_limit: 1024 * 1024,
                 upload_timeout_seconds: 300,
                 file_expiry_days: 30 * 3,
                 max_favorite_archives: 100,
@@ -480,7 +477,6 @@ mod tests {
                 matrix_domain: None,
             },
             users: vec![],
-            webclient_url: None,
         };
         let state = create_state(tempdir.path(), Arc::new(config))
             .await
