@@ -1,0 +1,15 @@
+[book]
+title = "vachat-server 使用文档"
+language = "zh-CN"
+src = "manuals"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/zimu7/vachat-server"
+edit-url-template = "https://github.com/zimu7/vachat-server/edit/main/docs/{path}"
+additional-css = []
+additional-js = []

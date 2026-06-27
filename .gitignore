@@ -8,3 +8,4 @@ build/docker/wwwroot
 build/docker/*.zip
 build/docker/vachat-server
 wwwroot
+docs/book
