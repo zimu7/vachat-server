@@ -259,15 +259,50 @@ cp -r dist/* /path/to/vachat-server/wwwroot/
 
 ## vachat-app 移动应用
 
-当前 `vachat-server` 仓库没有包含移动端源码，移动端需要在对应 App 源码仓库中编译。编译完成后，App 通过用户输入的服务器地址连接 `vachat-server`。
-
-移动端编译前建议先准备一个可访问的服务端地址，例如：
+`vachat-app` 是 Flutter 项目，项目支持 Android 和 iOS。编译前建议先准备一个可访问的 `vachat-server` 服务端地址，例如：
 
 ```text
 https://chat.example.com
 ```
 
-如果要支持 HTTPS、推送、相机、文件上传等能力，应优先使用正式域名和有效 TLS 证书。
+如果要支持相机、文件上传、语音、WebSocket、系统分享等移动端能力，建议使用正式域名和有效 TLS 证书。
+
+### 1. 安装 Flutter 环境
+
+安装 Flutter SDK 后，将 `flutter/bin` 加入 `PATH`，然后检查环境：
+
+```bash
+flutter --version
+flutter doctor
+```
+
+本项目 `pubspec.yaml` 中要求 Dart SDK 版本：
+
+```text
+>=3.11.0 <4.0.0
+```
+
+如果 `flutter doctor` 提示 Android、Xcode 或 CocoaPods 缺失，按提示补齐对应平台环境即可。
+
+进入移动端源码目录并安装依赖：
+
+```bash
+cd D:/workspace/vachat/vachat-app
+flutter pub get
+```
+
+如果修改过 JSON 模型或需要重新生成代码，可以执行：
+
+```bash
+dart run build_runner build --delete-conflicting-outputs
+```
+
+如果修改过应用图标或启动页资源，可以执行：
+
+```bash
+dart run flutter_launcher_icons
+dart run flutter_native_splash:create
+```
 
 ### 安卓应用
 
@@ -279,115 +314,117 @@ https://chat.example.com
 - Android SDK Build-Tools
 - Android SDK Platform-Tools
 - Android Emulator，可选
-- Android NDK，如项目依赖原生库再安装
+- Android NDK `28.2.13676358`
 
-配置环境变量：
+项目 Android 配置使用 Java 17，确认本机 JDK 版本：
+
+```bash
+java -version
+```
+
+配置 Android SDK 环境变量：
 
 ```bash
 export ANDROID_HOME="$HOME/Android/Sdk"
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin:$PATH"
 ```
 
-确认工具可用：
+确认 Android 工具可用：
 
 ```bash
 adb version
-```
-
-#### 2. 安装项目依赖
-
-进入移动端源码目录：
-
-```bash
-cd vachat-app
-```
-
-如果项目是 Flutter：
-
-```bash
+flutter doctor --android-licenses
 flutter doctor
-flutter pub get
 ```
 
-如果项目是 React Native：
+#### 2. 配置 Android 签名
+
+调试包不需要配置发布签名；如果要编译 release APK，需要先创建 keystore。
+
+在 `vachat-app/android` 目录执行：
 
 ```bash
-npm install
+keytool -genkey -v \
+  -keystore app/vachat-release.jks \
+  -keyalg RSA \
+  -keysize 2048 \
+  -validity 10000 \
+  -alias vachat \
+  -storepass xxxx \
+  -keypass yyyy \
+  -dname "CN=vachat, OU=vachat, O=vachat, L=Beijing, ST=Beijing, C=CN"
 ```
 
-或：
+然后创建 `vachat-app/android/key.properties`：
+
+```ini
+storePassword=xxxx
+keyPassword=yyyy
+keyAlias=vachat
+storeFile=vachat-release.jks
+```
+
+`storeFile` 是相对 `android/app/` 的路径；上面的命令会把证书生成到 `android/app/vachat-release.jks`。
+
+#### 3. 编译 Android 调试包
 
 ```bash
-pnpm install
-```
-
-如果项目是原生 Android，则使用 Gradle 同步依赖即可。
-
-#### 3. 配置服务器地址
-
-根据 App 项目的实际配置方式设置默认服务器地址。常见配置位置包括：
-
-```text
-.env
-android/app/src/main/res/values/strings.xml
-lib/config.dart
-src/config.ts
-```
-
-如果 App 首页允许用户手动输入服务器地址，也可以不内置默认地址。
-
-#### 4. 编译调试包
-
-Flutter 项目：
-
-```bash
+cd D:/workspace/vachat/vachat-app
 flutter build apk --debug
 ```
 
-React Native 或原生 Android 项目：
+调试包产物通常位于：
 
-```bash
-cd android
-./gradlew assembleDebug
+```text
+build/app/outputs/flutter-apk/app-debug.apk
 ```
 
-调试包适合安装到测试机验证，不建议公开分发。
+#### 4. 编译 Android 发布包
 
-#### 5. 编译发布包
-
-发布前需要准备签名证书，并在 Android 项目中配置 keystore。然后执行：
-
-Flutter 项目：
+编译通用 release APK：
 
 ```bash
 flutter build apk --release
 ```
 
-React Native 或原生 Android 项目：
-
-```bash
-cd android
-./gradlew assembleRelease
-```
-
-常见 APK 产物位置：
+产物通常位于：
 
 ```text
 build/app/outputs/flutter-apk/app-release.apk
-android/app/build/outputs/apk/release/app-release.apk
 ```
 
-如果需要上架应用商店，建议构建 AAB：
+如果需要按 CPU 架构拆分 APK，减少单个安装包体积：
+
+```bash
+flutter build apk --release --split-per-abi
+```
+
+会生成类似以下文件：
+
+```text
+build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+build/app/outputs/flutter-apk/app-x86_64-release.apk
+```
+
+如果只构建某个架构：
+
+```bash
+flutter build apk --release --target-platform android-arm64
+flutter build apk --release --target-platform android-arm
+flutter build apk --release --target-platform android-x64
+```
+
+如果需要上架 Google Play，建议构建 AAB：
 
 ```bash
 flutter build appbundle --release
 ```
 
-或：
+产物通常位于：
 
-```bash
-cd android
-./gradlew bundleRelease
+```text
+build/app/outputs/bundle/release/app-release.aab
 ```
 
 ### IOS应用
@@ -410,41 +447,34 @@ sudo gem install cocoapods
 pod --version
 ```
 
-如果是 Flutter 项目，还需要：
+检查 Flutter iOS 环境：
 
 ```bash
 flutter doctor
 ```
 
-#### 2. 安装项目依赖
+#### 2. 安装 iOS 依赖
 
 进入移动端源码目录：
 
 ```bash
-cd vachat-app
-```
-
-Flutter 项目：
-
-```bash
+cd D:/workspace/vachat/vachat-app
 flutter pub get
-cd ios
-pod install
-cd ..
 ```
 
-React Native 项目：
+在 macOS 上进入 iOS 工程安装 Pods：
 
 ```bash
-npm install
 cd ios
 pod install
 cd ..
 ```
 
-#### 3. 配置服务器地址和签名
+如果仓库中暂时没有 `ios/Podfile`，可以先执行一次 Flutter iOS 构建或运行命令，Flutter 会按项目配置生成所需的 iOS 辅助文件。
 
-根据项目实际情况配置默认服务器地址。然后打开 Xcode workspace：
+#### 3. 配置签名
+
+打开 Xcode workspace：
 
 ```bash
 open ios/*.xcworkspace
@@ -457,30 +487,30 @@ open ios/*.xcworkspace
 - Signing Certificate
 - Provisioning Profile
 
-#### 4. 编译调试版本
+iOS 真机调试、TestFlight 和正式分发都依赖 Apple Developer 账号。
 
-连接 iPhone 或启动模拟器后，可在 Xcode 中直接运行。
+#### 4. 编译 iOS 调试版本
 
-Flutter 项目也可以使用：
+连接 iPhone 或启动模拟器后执行：
 
 ```bash
 flutter run
 ```
 
-#### 5. 编译发布版本
+也可以在 Xcode 中选择设备后点击 Run。
 
-Flutter 项目：
+#### 5. 编译 iOS 发布版本
+
+构建 IPA：
 
 ```bash
 flutter build ipa --release
 ```
 
-React Native 或原生 iOS 项目通常在 Xcode 中选择：
+如果需要通过 Xcode 归档，可以选择：
 
 ```text
 Product → Archive
 ```
 
 归档完成后，在 Organizer 中导出 IPA 或上传到 App Store Connect。
-
-需要注意：iOS 真机安装和分发依赖 Apple Developer 账号，普通本地编译无法直接生成可长期分发的安装包。
