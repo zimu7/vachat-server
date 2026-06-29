@@ -3,7 +3,7 @@
 - [简介](./introduction.md)
 - [快速部署](./install.md)
 - [手动编译](./build.md)
-- [使用手册](./manual.md)
+- [初始化和使用](./manual.md)
 - [接入智能体](./agents/index.md)
   - [Hermes](./agents/hermes.md)
   - [Qwenpaw](./agents/qwenpaw.md)

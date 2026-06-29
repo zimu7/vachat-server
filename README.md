@@ -18,19 +18,19 @@ VaChat（Virtual Assistant Chat）是基于开源项目 [VoceChat](https://doc.v
 
 简单来说，VaChat是一个完全私有、安全、且只属于你一个人的AI 助理中心。
 
-![image-20260511205540](./docs/assets/vachat.png)
+![image-20260511205540](./docs/manuals/assets/vachat.png)
 
 
 
 ## 演示1：Web端指挥远程Claude Code完成编码任务
 
-![claude](./docs/assets/claude.gif)
+![claude](./docs/manuals/assets/claude.gif)
 
 
 
 ## 演示2：移动端与QwenPaw对话
 
-![qwenpaw](./docs/assets/qwenpaw.gif)
+![qwenpaw](./docs/manuals/assets/qwenpaw.gif)
 
 
 
@@ -92,7 +92,7 @@ docker run -d --restart=always \
 
 输入服务器名称、管理员邮箱和密码，即可完成安装。
 
-![image-20250411205918](./assets/image-20250411205918.png)
+![image-20250411205918](./docs/manuals/assets/init.png)
 
 
 
@@ -100,7 +100,7 @@ docker run -d --restart=always \
 
 首页点击注册。注意，VaChat 不强制验证邮箱真实性，只要格式正确即可注册登录。
 
-![image-20250511210039](./assets/image-20250511210039.png)
+![image-20250511210039](./docs/manuals/assets/register.png)
 
 
 
@@ -108,7 +108,7 @@ docker run -d --restart=always \
 
 在浏览器中输入服务器地址和端口号，登录页面输入邮箱账号和密码，登录成功即可使用。
 
-![image-20250511210136](./assets/image-20250511210136.png)
+![image-20250511210136](./docs/manuals/assets/web.png)
 
 
 
@@ -116,13 +116,9 @@ docker run -d --restart=always \
 
 安卓用户可下载 APK 安装包（iOS 版本目前暂未编译，后续会跟进）。
 
-安卓APK下载地址： 
-
-https://chat.zimu.pub/apk/cocochat-v0.1.1.apk
-
 首页输入服务器的地址和端口号，然后在登录页面输入邮箱和密码完成登录即可使用。
 
-![image-20250511210258](./assets/image-20250511210258.png)
+![image-20250511210258](./docs/manuals/assets/mobile.png)
 
 
 
@@ -134,65 +130,26 @@ VaChat对VoceChat做了二次开发，可以快速接入各种 AI Agent。其实
 
 ## **1、创建机器人**
 
-以管理员身份登录 VaChat 控制台，进入 **“机器人 & Webhook”** 菜单，点击创建机器人。
+以管理员身份登录 VaChat 控制台，进入 **设置 ->  成员** 菜单项，点击”新增“按钮，在新增时勾选 “设为机器人” 勾选框。
 
 - **名称：** 可以随便起，比如 `QwenBot，Agent使用用户密码方式接入时会用到。`
 - **密码：**机器人密码，当客户端使用账号密码方式接入时使用，如果使用token方式接入，这个密码就不起作用。
-- **Webhook URL：** 可选，用于接收推送数据，在matrix协议连接机器人的情况下没有用。
+
+![image-20250511210258](./docs/manuals/assets/add-bot.jpeg)
+
+
 
 
 
 ## **2、设置密码或API Key**
 
-如果智能体客户端使用token方式接入，需要创建ApiKey，使用用户名密码方式接入不需要，会自动创建ApiKey。
+如果智能体客户端不支持用户名密码接入，或者希望使用api key方式接入，可以创建ApiKey，注意使用用户名密码方式接入是不需要手动创建API Key，会自动创建ApiKey。
 
-机器人创建成功后，点击“新增API Key”创建机器人的ApiKey，请妥善保管这个信息，后续matrix接入的时候会用到。
-
-
-
-## **3、配置Matrix频道**
-
-下面以QwenPaw为例展示配置matrix频道的方法，QwenPaw有两种方式配置 Matrix 频道，其他智能体的配置方式可参见本节最后部分。
-
-### **方式一： 在 Console 中配置**
-
-前往 **控制 → 频道**，点击 **Matrix**，启用后填写：
-
-- **Homeserver URL:** 填写你的 CocoChat 服务器地址，格式为 `https://你的域名或IP:端口`。
-- **User ID:** 填写刚才创建机器人得到的 ID。
-- **Access Token:** 填写刚才生成的 Token。
-
-![image-20250511210606](./assets/image-20250511210606.png)
-
-### **方式二：编辑配置文件 (agent.json)**
-
-如果你是在本地运行智能体，找到 `agent.json` 文件（路径通常为 `~/.qwenpaw/workspaces/default/agent.json`），在 `channels` 中添加 matrix 配置：
-
-```
-"matrix": {
-  "enabled": true,
-  "bot_prefix": "[BOT]",
-  "homeserver": "https://matrix.org",
-  "user_id": "@mybot:matrix.org",
-  "access_token": "syt_..."
-}
-```
-
-保存后，智能体通常会自动重载配置。其他智能体的配置方式大同小异，
-
-注意：目前VaChat仅支持一对一聊天加密，不支持群组聊天加密，因此开启e2ee加密选项的情况下可能有不稳定的情况。
+机器人创建成功后，点击机器人列表后面“管理密钥” 来新增密钥。请妥善保管这个信息，后续通过密钥方式进行matrix接入的时候会用到。
 
 
 
-## **4、开始对话**
-
-配置成功后，你的机器人就会出现在好友列表中。直接点击对话，发送“Hello”，如果能收到回复，说明链路已经打通！
-
-![image-20250511210720](./assets/image-20250511210720.png)
-
-
-
-## 5、其他智能体配置说明
+## 3、智能体接入
 
 ### QwenPaw
 
@@ -216,9 +173,25 @@ https://github.com/zeroclaw-labs/zeroclaw/blob/master/docs/i18n/zh-CN/security/m
 
 
 
+## **4、开始对话**
+
+配置成功后，你的机器人就会出现在好友列表中。直接点击对话，发送“Hello”，如果能收到回复，说明链路已经打通！
+
+![image-20250511210720](./docs/manuals/assets/mobile-ok.png)
+
+
+
+
+
 # **六、使用cc-connect接入ClaudeCode等智能体**
 
-可以使用 [cc-connect](https://github.com/chenhg5/cc-connect) 将cluade code、codex、gemini cli、opencode等智能体接入cocochat，但cc-connect的当前版本尚不支持matrix协议，需要自行编译 [cc-connect-matrix](https://github.com/rablwupei/cc-connect-matrix) 这个feature分支才能通过matrix协议接入cocochat。
+可以使用 [cc-connect](https://github.com/chenhg5/cc-connect) 将cluade code、codex、gemini cli、opencode等智能体接入vachat。
+
+## 安装cc-connect
+
+
+
+## 配置信息
 
 编译完成后通过下面的matrix协议配置参数来接入cocochat。
 

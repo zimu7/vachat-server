@@ -1,83 +1,40 @@
+# 初始化和使用
+
+部署完成后，访问 `http://你的服务器IP:3000` 即可进入初始化页面。
+
+## **1、初始化**
+
+输入服务器名称、管理员邮箱和密码，即可完成安装。
+
+![image-20250411205918](assets/init.png)
 
 
 
+## **2、用户注册**
 
-# 部署服务
+首页点击注册。注意，vachat 不强制验证邮箱真实性，只要格式正确即可注册登录。
 
-config / config.toml
-
-
-
-```
-[system]
-data_dir = "./data"
-wwwroot_dir = "./wwwroot"
-token_expiry_seconds = 300
-refresh_token_expiry_seconds = 604800
-log_level = "debug"
-
-[network]
-bind = "0.0.0.0:443"
-domain = "chat.zimu.pub"
-matrix_domain= "zimu.pub"
-frontend_url = "http://127.0.0.1:3000"
-enable_swagger = false
-
-[network.tls]
-type = "certificate"
-cert_path = "./cert/fullchain.pem"
-key_path = "./cert/privkey.pem"
-#path = "./cert/"
-
-```
+![image-20250511210039](assets/register.png)
 
 
 
-# self_signed
+## **3、WEB端**
+
+在浏览器中输入服务器地址和端口号，登录页面输入邮箱账号和密码，登录成功即可使用。
+
+![image-20250511210136](assets\web.png)
 
 
 
-# certificate
+## **4、移动端**
+
+安卓用户可下载 APK 安装包（iOS 版本目前暂未编译，后续会跟进）。
+
+首页输入服务器的地址和端口号，然后在登录页面输入邮箱和密码完成登录即可使用。
+
+![image-20250511210258](assets/mobile.png)
 
 
-
-## 手动更新证书
-
-```
-sudo apt-get install certbot
-
-certbot certonly --standalone -d chat.zimu.pub
-```
-
-
-
-如果成功，证书应该会保存在下面的地址：
-
-```
-Successfully received certificate.
-Certificate is saved at: /etc/letsencrypt/live/chat.zimu.pub/fullchain.pem
-Key is saved at:         /etc/letsencrypt/live/chat.zimu.pub/privkey.pem
-This certificate expires on 2026-09-24.
-These files will be updated when the certificate renews.
-Certbot has set up a scheduled task to automatically renew this certificate in the background.
-```
-
-
-
-拷贝证书，其中 ~/vachat-server/cert 是vachat-server服务所在的地址。
-
-```
-cp /etc/letsencrypt/live/chat.zimu.pub/fullchain.pem  ~/vachat-server/cert/
-cp /etc/letsencrypt/live/chat.zimu.pub/privkey.pem  ~/vachat-server/cert/
-```
-
-
-
-# acme_http_01
-
-
-
-# acme_tls_alpn_01
 
 
 
