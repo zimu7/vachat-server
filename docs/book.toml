@@ -11,5 +11,5 @@ default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/zimu7/vachat-server"
 edit-url-template = "https://github.com/zimu7/vachat-server/edit/main/docs/{path}"
-additional-css = []
+additional-css = ["theme/custom.css"]
 additional-js = []

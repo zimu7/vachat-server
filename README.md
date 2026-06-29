@@ -18,19 +18,19 @@ VaChat（Virtual Assistant Chat）是基于开源项目 [VoceChat](https://doc.v
 
 简单来说，VaChat是一个完全私有、安全、且只属于你一个人的AI 助理中心。
 
-![image-20260511205540](./assets/image-20260511205540.png)
+![image-20260511205540](./docs/assets/vachat.png)
 
 
 
 ## 演示1：Web端指挥远程Claude Code完成编码任务
 
-![claude](./assets/claude.gif)
+![claude](./docs/assets/claude.gif)
 
 
 
 ## 演示2：移动端与QwenPaw对话
 
-![qwenpaw](./assets/qwenpaw.gif)
+![qwenpaw](./docs/assets/qwenpaw.gif)
 
 
 

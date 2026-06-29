@@ -1,0 +1,15 @@
+.content main {
+  max-width: min(1100px, calc(100vw - 96px));
+}
+
+@media (max-width: 768px) {
+  .content main {
+    max-width: calc(100vw - 48px);
+  }
+}
+
+@media (max-width: 480px) {
+  .content main {
+    max-width: calc(100vw - 32px);
+  }
+}
