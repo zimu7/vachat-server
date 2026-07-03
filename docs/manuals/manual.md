@@ -32,7 +32,7 @@
 
 首页输入服务器的地址和端口号，然后在登录页面输入邮箱和密码完成登录即可使用。
 
-![image-20250511210258](assets/mobile.png)
+![image-app-login](assets/app-login.jpg)
 
 
 
