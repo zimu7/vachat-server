@@ -4,7 +4,7 @@ language = "zh-CN"
 src = "manuals"
 
 [build]
-build-dir = "book"
+build-dir = "docs"
 
 [output.html]
 default-theme = "light"

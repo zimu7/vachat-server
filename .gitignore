@@ -9,3 +9,4 @@ build/docker/*.zip
 build/docker/vachat-server
 wwwroot
 docs/book
+/docs/docs

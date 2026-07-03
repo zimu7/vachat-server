@@ -408,7 +408,9 @@ pub async fn create_endpoint(state: State) -> impl Endpoint {
     let route = Route::new()
         .nest(
             "/",
-            poem::endpoint::StaticFilesEndpoint::new(wwwroot_dir).index_file("index.html"),
+            poem::endpoint::StaticFilesEndpoint::new(wwwroot_dir)
+                .index_file("index.html")
+                .redirect_to_slash_directory(),
         )
         .at("/health", poem::endpoint::make_sync(|_| ()))
         .at("/metrics", metrics.exporter())
