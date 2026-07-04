@@ -41,12 +41,14 @@ qwenpaw目前好像只支持accesstoken方式接入，需要在 VaChat 控制台
 ```
 "matrix": {
   "enabled": true,
-  "bot_prefix": "[BOT]",
+  "bot_prefix": "qwenpaw",
   "homeserver": "https://chat.zimu.pub",
   "user_id": "@test:zimu.pub",
   "access_token": "syt_..."
 }
 ```
+
+主要就是上面这几个字段，其他一些字段可以暂时不用管。
 
 **Matrix 专属字段说明：**
 
@@ -83,3 +85,4 @@ qwenpaw app --log-level debug
 - Matrix 频道当前**仅支持文本消息**（不支持图片/文件附件）。
 - 机器人只能接收已加入房间的消息，发消息前请先邀请机器人进入对应房间。
 - 如使用自建服务器，将 `homeserver` 设置为你的服务器地址（例如 `https://matrix.example.com`）。
+- 注意qwenpaw是支持多智能体的，因此需要配置的是 /.qwenpaw/workspaces/{AGENT_NAME}/agent.json 文件。
