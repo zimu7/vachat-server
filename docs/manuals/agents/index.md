@@ -29,7 +29,6 @@ VaChat 在 VoceChat 基础上做了二次开发，可以快速接入各种 AI Ag
 目前 VaChat 已适配以下智能体，接入详情请参考对应文档：
 
 - [QwenPaw](./qwenpaw.md)：基于通义千问的智能体，本文以它为例演示完整接入流程。
-- [OpenClaw](./openclaw.md)：基于 OpenAI 兼容协议的通用智能体。
 - [Hermes](./hermes.md)：面向运维场景的智能体。
 - [Nanobot](./nanobot.md)：轻量级嵌入式智能体。
 
