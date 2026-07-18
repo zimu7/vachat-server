@@ -28,7 +28,107 @@ cargo --version
 config/cargo.toml
 ```
 
-### 2. 编译调试版本
+
+
+### 2. Windows 安装 Rust 和 Cargo 环境
+
+Windows 上推荐使用官方的 `rustup-init.exe` 安装工具。访问以下地址下载：
+
+```text
+https://win.rustup.rs/x86_64
+```
+
+下载后双击运行 `rustup-init.exe`，按提示选择默认安装即可。安装过程会自动配置 MSVC 工具链，因此需要先安装 Visual Studio Build Tools（包含 "使用 C++ 的桌面开发" 工作负载）。
+
+也可以使用 winget 安装：
+
+```powershell
+winget install Rustlang.Rustup
+```
+
+安装完成后重新打开终端，确认版本：
+
+```powershell
+rustc --version
+cargo --version
+```
+
+如果使用 PowerShell，可手动刷新环境变量：
+
+```powershell
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+```
+
+### 3. 中国大陆加速配置
+
+在中国大陆访问 crates.io 和 rustup 源较慢，建议同时配置 rustup 镜像和 Cargo 镜像。
+
+#### 设置 rustup 镜像
+
+在 PowerShell 中设置环境变量后再执行安装：
+
+```powershell
+$env:RUSTUP_DIST_SERVER = "https://mirrors.ustc.edu.cn/rust-static"
+$env:RUSTUP_UPDATE_ROOT = "https://mirrors.ustc.edu.cn/rust-static/rustup"
+```
+
+Linux/macOS 下使用：
+
+```bash
+export RUSTUP_DIST_SERVER="https://mirrors.ustc.edu.cn/rust-static"
+export RUSTUP_UPDATE_ROOT="https://mirrors.ustc.edu.cn/rust-static/rustup"
+```
+
+如需永久生效，将上述命令写入 shell 配置文件（如 `~/.bashrc` 或 `~/.zshrc`），Windows 下可在系统环境变量中添加。
+
+#### 设置 Cargo 镜像
+
+将项目中的示例配置复制到用户目录或项目根目录：
+
+```bash
+cp config/cargo.toml ~/.cargo/config.toml
+```
+
+`config/cargo.toml` 中已配置中科大（USTC）镜像，并附带了清华、阿里云镜像，可按需修改 `replace-with` 切换：
+
+```toml
+[source.crates-io]
+replace-with = 'aliyun' # 可替换为其他源，如 'ustc', 'tuna'
+
+[source.aliyun]
+registry = "sparse+https://mirrors.aliyun.com/crates.io-index/"
+
+[source.ustc]
+registry = "https://mirrors.ustc.edu.cn/crates.io-index"
+
+[source.tuna]
+registry = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
+```
+
+#### 通过代理访问
+
+如果本机已有 HTTP 代理，也可以让 Cargo 和 rustup 走代理，而不使用镜像：
+
+```bash
+# Linux/macOS
+export HTTP_PROXY="http://127.0.0.1:7890"
+export HTTPS_PROXY="http://127.0.0.1:7890"
+```
+
+```powershell
+# Windows PowerShell
+$env:HTTP_PROXY = "http://127.0.0.1:7890"
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
+```
+
+也可以只对 Cargo 配置代理，在 `~/.cargo/config.toml` 中添加：
+
+```toml
+[http]
+proxy = "http://127.0.0.1:7890"
+```
+
+### 4. 编译调试版本
 
 在项目根目录执行：
 
@@ -44,7 +144,7 @@ target/debug/vachat-server
 
 调试版本适合本地开发验证，体积较大，运行性能也低于 release 版本。
 
-### 3. 编译发布版本
+### 5. 编译发布版本
 
 ```bash
 cargo build --release
@@ -86,7 +186,7 @@ data/
 http://localhost:3000
 ```
 
-### 4. 编译 Linux 静态二进制
+### 6. 编译 Linux 静态二进制
 
 如果希望构建更适合 Docker 或服务器部署的 Linux 静态二进制，可以使用项目中的 Docker 编译方式。该方式依赖本机已安装 Docker。
 
@@ -125,7 +225,7 @@ docker run --rm -it \
 target/x86_64-unknown-linux-musl/release/vachat-server
 ```
 
-### 5. 构建 Docker 镜像
+### 7. 构建 Docker 镜像
 
 先准备 Docker 构建目录需要的文件：
 
