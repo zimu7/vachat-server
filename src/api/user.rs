@@ -312,7 +312,8 @@ pub enum RegisterUserResponse {
 struct UpdateContactStatusRequest {
     /// Target user id
     target_uid: i64,
-    /// Action: "add" to add contact, "remove" to remove contact, "block" to block user, "unblock" to unblock user
+    /// Action: "add" to add contact, "remove" to delete contact (hide from list),
+    /// "block" to block messaging (still visible), "unblock" to unblock user
     action: String,
 }
 
@@ -695,11 +696,21 @@ impl ApiUser {
             .get(&token.uid)
             .ok_or_else(|| Error::from_status(StatusCode::UNAUTHORIZED))?;
 
-        // Build contact responses from current_user.contacts
+        // Contacts are visible by default. Blocking and deletion are two
+        // independent features:
+        //   - blocked (status == 2): still visible in the list, but cannot be
+        //     messaged (enforced in `message.rs`).
+        //   - deleted (status == 3): the only way to hide a user from the list.
+        // A user with no contacts record is "default"; an explicitly added user
+        // (status == 1) is "added".
         let mut contacts: Vec<ContactResponse> = Vec::new();
-        for (&target_uid, contact_info) in &current_user.contacts {
-            if let Some(target_user) = cache.users.get(&target_uid) {
-                contacts.push(ContactResponse {
+        for (&target_uid, target_user) in &cache.users {
+            if target_uid == token.uid {
+                continue;
+            }
+            match current_user.contacts.get(&target_uid) {
+                Some(contact_info) if contact_info.status == 3 => continue,
+                Some(contact_info) => contacts.push(ContactResponse {
                     contact_info: ContactInfo {
                         created_at: contact_info.created_at,
                         updated_at: contact_info.updated_at,
@@ -711,7 +722,16 @@ impl ApiUser {
                     },
                     target_info: target_user.api_user_info(target_uid),
                     target_uid,
-                });
+                }),
+                None => contacts.push(ContactResponse {
+                    contact_info: ContactInfo {
+                        created_at: target_user.created_at,
+                        updated_at: target_user.updated_at,
+                        status: "default".to_string(),
+                    },
+                    target_info: target_user.api_user_info(target_uid),
+                    target_uid,
+                }),
             }
         }
 
@@ -1244,12 +1264,22 @@ impl ApiUser {
         let mut tx = state.db_pool.begin().await.map_err(InternalServerError)?;
 
         match req.action.as_str() {
-            "add" | "block" => {
+            "add" | "block" | "remove" => {
+                // `remove` here means "delete contact": it persists a deleted
+                // record (status = 3) so the user is hidden from the list,
+                // rather than dropping the row (which would re-show them as
+                // default-visible). Blocking (status = 2) keeps the user
+                // visible but blocks messaging.
                 let sql = r#"
                     insert into contacts (uid, target_uid, status) values (?, ?, ?)
                         on conflict (uid, target_uid) do update set status = excluded.status, updated_at = current_timestamp
                     "#;
-                let status = if req.action == "add" { 1 } else { 2 };
+                let status = match req.action.as_str() {
+                    "add" => 1,
+                    "block" => 2,
+                    "remove" => 3,
+                    _ => unreachable!(),
+                };
                 sqlx::query(sql)
                     .bind(token.uid)
                     .bind(req.target_uid)
@@ -1258,19 +1288,9 @@ impl ApiUser {
                     .await
                     .map_err(InternalServerError)?;
             }
-            "remove" => {
-                let sql = "delete from contacts where uid = ? and target_uid = ?";
-                sqlx::query(sql)
-                    .bind(token.uid)
-                    .bind(req.target_uid)
-                    .execute(&mut tx)
-                    .await
-                    .map_err(InternalServerError)?;
-            }
             "unblock" => {
-                let sql = "update contacts set status = ?, updated_at = current_timestamp where uid = ? and target_uid = ? and status = ?";
+                let sql = "delete from contacts where uid = ? and target_uid = ? and status = ?";
                 sqlx::query(sql)
-                    .bind(1)
                     .bind(token.uid)
                     .bind(req.target_uid)
                     .bind(2)
@@ -1285,9 +1305,14 @@ impl ApiUser {
 
         // Update cache - update user's contacts
         match req.action.as_str() {
-            "add" | "block" => {
+            "add" | "block" | "remove" => {
                 let now = DateTime::now();
-                let status = if req.action == "add" { 1 } else { 2 };
+                let status = match req.action.as_str() {
+                    "add" => 1,
+                    "block" => 2,
+                    "remove" => 3,
+                    _ => unreachable!(),
+                };
                 user.contacts.insert(
                     req.target_uid,
                     CacheContactInfo {
@@ -1297,15 +1322,15 @@ impl ApiUser {
                     },
                 );
             }
-            "remove" => {
-                user.contacts.remove(&req.target_uid);
-            }
             "unblock" => {
-                if let Some(contact_info) = user.contacts.get_mut(&req.target_uid) {
-                    if contact_info.status == 2 {
-                        contact_info.status = 1;
-                        contact_info.updated_at = DateTime::now();
-                    }
+                // Unblock returns the user to the default-visible state: remove
+                // the contacts record rather than leaving an "added" entry.
+                let was_blocked = user
+                    .contacts
+                    .get(&req.target_uid)
+                    .map_or(false, |c| c.status == 2);
+                if was_blocked {
+                    user.contacts.remove(&req.target_uid);
                 }
             }
             _ => unreachable!(),
@@ -4132,5 +4157,198 @@ mod tests {
             .object()
             .get("token")
             .assert_not_null();
+    }
+
+    /// Helper: fetch the caller's contact list as (target_uid, status) pairs.
+    async fn contact_uids_and_statuses(server: &TestServer, token: &str) -> Vec<(i64, String)> {
+        let resp = server
+            .get("/api/user/contacts")
+            .header("X-API-Key", token)
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        resp.json()
+            .await
+            .value()
+            .array()
+            .iter()
+            .map(|c| {
+                let obj = c.object();
+                (
+                    obj.get("target_uid").i64(),
+                    obj.get("contact_info")
+                        .object()
+                        .get("status")
+                        .string()
+                        .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn contacts_visible_by_default() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let uid1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let uid2 = server.create_user(&admin_token, "user2@zimu.pub").await;
+        let token1 = server.login("user1@zimu.pub").await;
+
+        // user2 has no contacts record with user1, yet must be visible as "default".
+        let contacts = contact_uids_and_statuses(&server, &token1).await;
+        let uid2_status = contacts
+            .iter()
+            .find(|(uid, _)| *uid == uid2)
+            .map(|(_, s)| s.as_str());
+        assert_eq!(uid2_status, Some("default"));
+
+        // user1 must not appear in their own contact list.
+        assert!(!contacts.iter().any(|(uid, _)| *uid == uid1));
+    }
+
+    #[tokio::test]
+    async fn blocked_contact_is_visible_and_unblock_returns_to_default() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let _uid1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let uid2 = server.create_user(&admin_token, "user2@zimu.pub").await;
+        let token1 = server.login("user1@zimu.pub").await;
+
+        // block user2
+        server
+            .post("/api/user/update_contact_status")
+            .header("X-API-Key", &token1)
+            .body_json(&json!({ "target_uid": uid2, "action": "block" }))
+            .send()
+            .await
+            .assert_status_is_ok();
+
+        // Blocking only suppresses messaging; user2 stays visible as "blocked".
+        let contacts = contact_uids_and_statuses(&server, &token1).await;
+        let uid2_status = contacts
+            .iter()
+            .find(|(uid, _)| *uid == uid2)
+            .map(|(_, s)| s.as_str());
+        assert_eq!(uid2_status, Some("blocked"));
+
+        // unblock -> user2 returns to "default" (no leftover "added")
+        server
+            .post("/api/user/update_contact_status")
+            .header("X-API-Key", &token1)
+            .body_json(&json!({ "target_uid": uid2, "action": "unblock" }))
+            .send()
+            .await
+            .assert_status_is_ok();
+
+        let contacts = contact_uids_and_statuses(&server, &token1).await;
+        let uid2_status = contacts
+            .iter()
+            .find(|(uid, _)| *uid == uid2)
+            .map(|(_, s)| s.as_str());
+        assert_eq!(uid2_status, Some("default"));
+    }
+
+    #[tokio::test]
+    async fn added_contact_has_added_status() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let _uid1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let uid2 = server.create_user(&admin_token, "user2@zimu.pub").await;
+        let token1 = server.login("user1@zimu.pub").await;
+
+        server
+            .post("/api/user/update_contact_status")
+            .header("X-API-Key", &token1)
+            .body_json(&json!({ "target_uid": uid2, "action": "add" }))
+            .send()
+            .await
+            .assert_status_is_ok();
+
+        let contacts = contact_uids_and_statuses(&server, &token1).await;
+        let uid2_status = contacts
+            .iter()
+            .find(|(uid, _)| *uid == uid2)
+            .map(|(_, s)| s.as_str());
+        assert_eq!(uid2_status, Some("added"));
+    }
+
+    #[tokio::test]
+    async fn direct_message_blocked_by_recipient() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let uid1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let uid2 = server.create_user(&admin_token, "user2@zimu.pub").await;
+        let token1 = server.login("user1@zimu.pub").await;
+        let token2 = server.login("user2@zimu.pub").await;
+
+        // user1 blocks user2
+        server
+            .post("/api/user/update_contact_status")
+            .header("X-API-Key", &token1)
+            .body_json(&json!({ "target_uid": uid2, "action": "block" }))
+            .send()
+            .await
+            .assert_status_is_ok();
+
+        // user2 sending a DM to user1 is rejected (recipient blocked the sender)
+        let resp = server
+            .post(format!("/api/user/{}/send", uid1))
+            .header("X-API-Key", &token2)
+            .header("Referer", "http://localhost/")
+            .content_type("text/plain")
+            .body("hi")
+            .send()
+            .await;
+        resp.assert_status(poem::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn deleted_contact_is_hidden_but_messages_allowed() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let uid1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let uid2 = server.create_user(&admin_token, "user2@zimu.pub").await;
+        let token1 = server.login("user1@zimu.pub").await;
+        let token2 = server.login("user2@zimu.pub").await;
+
+        // user1 deletes user2 (remove -> status = 3, hidden from list)
+        server
+            .post("/api/user/update_contact_status")
+            .header("X-API-Key", &token1)
+            .body_json(&json!({ "target_uid": uid2, "action": "remove" }))
+            .send()
+            .await
+            .assert_status_is_ok();
+
+        // user2 is now hidden from user1's contact list
+        let contacts = contact_uids_and_statuses(&server, &token1).await;
+        assert!(!contacts.iter().any(|(uid, _)| *uid == uid2));
+
+        // Deletion only controls list visibility; messaging is unaffected, so
+        // user2 can still DM user1 (only a block, status == 2, rejects sends).
+        let resp = server
+            .post(format!("/api/user/{}/send", uid1))
+            .header("X-API-Key", &token2)
+            .header("Referer", "http://localhost/")
+            .content_type("text/plain")
+            .body("hi")
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+
+        // Restoring: re-adding brings user2 back as "added" (overwrites deleted)
+        server
+            .post("/api/user/update_contact_status")
+            .header("X-API-Key", &token1)
+            .body_json(&json!({ "target_uid": uid2, "action": "add" }))
+            .send()
+            .await
+            .assert_status_is_ok();
+        let contacts = contact_uids_and_statuses(&server, &token1).await;
+        let uid2_status = contacts
+            .iter()
+            .find(|(uid, _)| *uid == uid2)
+            .map(|(_, s)| s.as_str());
+        assert_eq!(uid2_status, Some("added"));
     }
 }

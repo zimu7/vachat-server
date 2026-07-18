@@ -10,3 +10,4 @@ build/docker/vachat-server
 wwwroot
 docs/book
 /docs/docs
+/cert/ca.crt
