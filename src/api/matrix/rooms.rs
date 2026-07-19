@@ -796,7 +796,6 @@ async fn handle_send_message(
         )
     })?;
     let body_str = String::from_utf8_lossy(&body_bytes);
-    tracing::info!("Matrix send message body: {}", body_str);
 
     // Parse Matrix message format to extract message content
     let matrix_msg: Value = serde_json::from_str(&body_str).map_err(|e| {
@@ -810,6 +809,12 @@ async fn handle_send_message(
         .get("body")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+
+    // Log the decoded `msg_body` (a real &str), not the raw `body_str`.
+    // The raw body keeps the client's `\uXXXX` escapes; serde_json only decodes
+    // them when deserializing into a String/&str, so logging body_str would
+    // print 现 instead of actual Chinese characters.
+    tracing::info!("Matrix send message body: {}", msg_body);
 
     // Check if message has format field (indicates formatted content like markdown)
     // Matrix spec: if "format" is present (e.g., "org.matrix.custom.html"), use text/markdown
