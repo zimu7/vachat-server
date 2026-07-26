@@ -52,6 +52,7 @@ pub struct CreateUser<'a> {
     create_by: CreateUserBy<'a>,
     webhook_url: Option<&'a str>,
     is_bot: bool,
+    agent_type: Option<&'a str>,
 }
 
 impl<'a> CreateUser<'a> {
@@ -65,6 +66,7 @@ impl<'a> CreateUser<'a> {
             create_by,
             webhook_url: None,
             is_bot: false,
+            agent_type: None,
         }
     }
 
@@ -78,6 +80,15 @@ impl<'a> CreateUser<'a> {
 
     pub fn set_bot(self, is_bot: bool) -> Self {
         Self { is_bot, ..self }
+    }
+
+    /// Set the bot's agent type (e.g. "qwenpaw", "hermes", "cc_connect"), used by
+    /// the Matrix bridge to pick the content-type converter.
+    pub fn agent_type(self, agent_type: &'a str) -> Self {
+        Self {
+            agent_type: Some(agent_type),
+            ..self
+        }
     }
 
     pub fn language(self, language: &'a LangId) -> Self {
@@ -144,7 +155,7 @@ impl State {
         } else {
             DateTime::zero()
         };
-        let sql = "insert into user (name, password, email, gender, language, is_admin, create_by, avatar_updated_at, status, created_at, updated_at, is_guest, webhook_url, is_bot) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        let sql = "insert into user (name, password, email, gender, language, is_admin, create_by, avatar_updated_at, status, created_at, updated_at, is_guest, webhook_url, is_bot, agent_type) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         let uid = sqlx::query(sql)
             .bind(create_user.name)
             .bind(&hashed_password)
@@ -160,6 +171,7 @@ impl State {
             .bind(is_guest)
             .bind(create_user.webhook_url)
             .bind(create_user.is_bot)
+            .bind(create_user.agent_type)
             .execute(&mut tx)
             .await
             .map_err(InternalServerError)?
@@ -221,6 +233,7 @@ impl State {
                 is_guest,
                 webhook_url: create_user.webhook_url.map(ToString::to_string),
                 is_bot: create_user.is_bot,
+                agent_type: create_user.agent_type.map(ToString::to_string),
                 bot_keys: Default::default(),
                 bot_online: false,
             },

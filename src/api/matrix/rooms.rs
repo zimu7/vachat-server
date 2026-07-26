@@ -13,10 +13,12 @@ use sha2::Sha256;
 use vodozemac::olm::{Message, OlmMessage, PreKeyMessage, Session as OlmSession};
 
 use crate::api::message::{
-    send_message, ChatMessageContent, ChatMessagePayload, MessageDetail, MessageTarget,
+    send_message, ChatMessagePayload, MessageDetail, MessageTarget,
 };
 use crate::api::DateTime;
 use crate::state::State;
+
+use super::agent_convert;
 
 /// Get pickle key using HMAC-SHA256
 fn get_pickle_key(server_key: &str) -> [u8; 32] {
@@ -816,26 +818,27 @@ async fn handle_send_message(
     // print 现 instead of actual Chinese characters.
     tracing::info!("Matrix send message body: {}", msg_body);
 
-    // Check if message has format field (indicates formatted content like markdown)
-    // Matrix spec: if "format" is present (e.g., "org.matrix.custom.html"), use text/markdown
-    let content_type = if matrix_msg.get("format").is_some() {
-        "text/markdown"
-    } else {
-        "text/plain"
+    tracing::info!("Received message from {}: {}", sender_uid, msg_body);
+
+    // Look up the bot's agent_type to dispatch to the right converter. The
+    // cache read is scoped so the guard drops before send_message re-locks.
+    let agent_type = {
+        let cache = state.cache.read().await;
+        cache
+            .users
+            .get(&sender_uid)
+            .and_then(|user| user.agent_type.clone())
     };
 
-    tracing::info!("Received message from {}: {}", sender_uid, msg_body);
+    // Convert the Matrix content into a vachat ChatMessageContent (vachat/agent/*).
+    let content = agent_convert::convert_agent_matrix_content(&matrix_msg, agent_type.as_deref());
 
     // Echo back the message
     let reply_payload = ChatMessagePayload {
         from_uid: sender_uid,
         target,
         detail: MessageDetail::Normal(crate::api::message::MessageNormal {
-            content: ChatMessageContent {
-                content_type: content_type.to_string(),
-                content: format!("{}", msg_body),
-                properties: None,
-            },
+            content,
             expires_in: None,
         }),
         created_at: DateTime::now(),
@@ -865,7 +868,7 @@ async fn handle_send_encrypted_message(
     let matrix_domain = super::auth::get_matrix_domain(state);
 
     // Parse room_id to determine target
-    let (target, _bot_uid) = parse_room_target(room_id, uid, &matrix_domain)?;
+    let (target, bot_uid) = parse_room_target(room_id, uid, &matrix_domain)?;
 
     // Extract sender_uid from target
     let sender_uid = match &target {
@@ -1032,16 +1035,23 @@ async fn handle_send_encrypted_message(
         message_body
     );
 
+    // Look up the bot's agent_type to dispatch to the right converter.
+    let agent_type = {
+        let cache = state.cache.read().await;
+        cache
+            .users
+            .get(&bot_uid)
+            .and_then(|user| user.agent_type.clone())
+    };
+    let matrix_content = decrypted_json.get("content").unwrap_or(&decrypted_json);
+    let content = agent_convert::convert_agent_matrix_content(matrix_content, agent_type.as_deref());
+
     // Store the decrypted message
     let reply_payload = ChatMessagePayload {
         from_uid: sender_uid,
         target,
         detail: MessageDetail::Normal(crate::api::message::MessageNormal {
-            content: ChatMessageContent {
-                content_type: "text/plain".to_string(),
-                content: message_body.to_string(),
-                properties: None,
-            },
+            content,
             expires_in: None,
         }),
         created_at: DateTime::now(),
@@ -1214,6 +1224,17 @@ async fn handle_megolm_encrypted_message(
         message_body
     );
 
+    // Look up the bot's agent_type to dispatch to the right converter.
+    let agent_type = {
+        let cache = state.cache.read().await;
+        cache
+            .users
+            .get(&bot_uid)
+            .and_then(|user| user.agent_type.clone())
+    };
+    let matrix_content = decrypted_json.get("content").unwrap_or(&decrypted_json);
+    let content = agent_convert::convert_agent_matrix_content(matrix_content, agent_type.as_deref());
+
     // Store the decrypted message
     // from_uid = bot_uid (the bot is the sender of the stored message)
     // target = User(sender_uid) (send to the user who sent the original message)
@@ -1221,11 +1242,7 @@ async fn handle_megolm_encrypted_message(
         from_uid: bot_uid,
         target,
         detail: MessageDetail::Normal(crate::api::message::MessageNormal {
-            content: ChatMessageContent {
-                content_type: "text/plain".to_string(),
-                content: message_body.to_string(),
-                properties: None,
-            },
+            content,
             expires_in: None,
         }),
         created_at: DateTime::now(),

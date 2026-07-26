@@ -49,6 +49,9 @@ pub struct CreateUserRequest {
     pub webhook_url: Option<String>,
     #[oai(default)]
     pub is_bot: bool,
+    /// Agent type for bots (e.g. "qwenpaw", "hermes", "cc_connect"); selects the
+    /// Matrix content-type converter. Ignored for non-bots.
+    pub agent_type: Option<String>,
 }
 
 /// User info for admin
@@ -71,6 +74,7 @@ pub struct User {
     pub status: UserStatus,
     pub webhook_url: Option<String>,
     pub is_bot: bool,
+    pub agent_type: Option<String>,
 }
 
 /// Update user request
@@ -86,6 +90,7 @@ pub struct UpdateUserRequest {
     language: Option<LangId>,
     status: Option<UserStatus>,
     webhook_url: Option<String>,
+    agent_type: Option<String>,
 }
 
 impl UpdateUserRequest {
@@ -99,6 +104,7 @@ impl UpdateUserRequest {
             && self.language.is_none()
             && self.status.is_none()
             && self.webhook_url.is_none()
+            && self.agent_type.is_none()
     }
 }
 
@@ -183,6 +189,9 @@ impl ApiAdminUser {
             }
 
             create_user = create_user.webhook_url(webhook_url);
+        }
+        if let Some(agent_type) = &req.0.agent_type {
+            create_user = create_user.agent_type(agent_type);
         }
         let res = state.create_user(create_user).await;
 
@@ -281,6 +290,7 @@ impl ApiAdminUser {
                 || req.is_bot.is_some()
                 || req.language.is_some()
                 || req.status.is_some()
+                || req.agent_type.is_some()
             {
                 return Err(Error::from_status(StatusCode::FORBIDDEN));
             }
@@ -354,6 +364,7 @@ impl ApiAdminUser {
                 .chain(req.is_bot.iter().map(|_| "is_bot = ?"))
                 .chain(req.status.iter().map(|_| "status = ?"))
                 .chain(req.webhook_url.iter().map(|_| "webhook_url = ?"))
+                .chain(req.agent_type.iter().map(|_| "agent_type = ?"))
                 .chain(Some("updated_at = ?"))
                 .join(", ")
         );
@@ -385,6 +396,9 @@ impl ApiAdminUser {
         }
         if let Some(webhook_url) = &req.webhook_url {
             query = query.bind(webhook_url);
+        }
+        if let Some(agent_type) = &req.agent_type {
+            query = query.bind(agent_type);
         }
 
         query
@@ -440,6 +454,9 @@ impl ApiAdminUser {
         }
         if let Some(webhook_url) = req.0.webhook_url {
             cached_user.webhook_url = Some(webhook_url);
+        }
+        if let Some(agent_type) = req.0.agent_type {
+            cached_user.agent_type = Some(agent_type);
         }
 
         if let Some(UserStatus::Frozen) = req.0.status {

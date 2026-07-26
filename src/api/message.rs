@@ -87,6 +87,7 @@ impl ChatMessageContent {
             }
             "text/markdown" => Some("You have a new message".to_string()),
             "vachat/file" => Some("You have a new file".to_string()),
+            "vachat/agent/thinking" | "vachat/agent/tool_use" | "vachat/agent/tool_result" => None,
             _ => None,
         }
     }
@@ -576,6 +577,32 @@ pub struct FileInfo {
     pub path: String,
 }
 
+/// Agent tool use request
+#[derive(Debug, Object)]
+pub struct AgentToolUse {
+    /// Tool name
+    pub name: String,
+
+    /// Tool use identifier (correlates with the corresponding tool result)
+    pub id: String,
+
+    /// Tool input
+    pub input: Value,
+}
+
+/// Agent tool result request
+#[derive(Debug, Object)]
+pub struct AgentToolResult {
+    /// The tool use identifier this result corresponds to
+    pub tool_use_id: String,
+
+    /// Tool result content
+    pub result: String,
+
+    /// Whether the tool execution errored
+    pub is_error: Option<bool>,
+}
+
 #[derive(Debug, ApiRequest)]
 pub enum SendMessageRequest {
     Text(PlainText<String>),
@@ -585,6 +612,12 @@ pub enum SendMessageRequest {
     File(Json<FileInfo>),
     #[oai(content_type = "vachat/archive")]
     Archive(PlainText<String>),
+    #[oai(content_type = "vachat/agent/thinking")]
+    AgentThinking(PlainText<String>),
+    #[oai(content_type = "vachat/agent/tool_use")]
+    AgentToolUse(Json<AgentToolUse>),
+    #[oai(content_type = "vachat/agent/tool_result")]
+    AgentToolResult(Json<AgentToolResult>),
 }
 
 impl SendMessageRequest {
@@ -638,6 +671,33 @@ impl SendMessageRequest {
                 properties,
                 content_type: "vachat/archive".to_string(),
                 content: path.0,
+            }),
+            SendMessageRequest::AgentThinking(thinking) => Ok(ChatMessageContent {
+                properties,
+                content_type: "vachat/agent/thinking".to_string(),
+                content: thinking.0,
+            }),
+            SendMessageRequest::AgentToolUse(Json(tool_use)) => Ok(ChatMessageContent {
+                properties: Some({
+                    let mut properties = properties.unwrap_or_default();
+                    properties.insert("id".to_string(), tool_use.id.into());
+                    properties.insert("input".to_string(), tool_use.input);
+                    properties
+                }),
+                content_type: "vachat/agent/tool_use".to_string(),
+                content: tool_use.name,
+            }),
+            SendMessageRequest::AgentToolResult(Json(tool_result)) => Ok(ChatMessageContent {
+                properties: Some({
+                    let mut properties = properties.unwrap_or_default();
+                    properties.insert("result".to_string(), tool_result.result.into());
+                    if let Some(is_error) = tool_result.is_error {
+                        properties.insert("is_error".to_string(), is_error.into());
+                    }
+                    properties
+                }),
+                content_type: "vachat/agent/tool_result".to_string(),
+                content: tool_result.tool_use_id,
             }),
         }
     }
@@ -1013,6 +1073,56 @@ pub fn get_merged_message(db: &MsgDb, mid: i64) -> poem::Result<Option<MergedMes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_notify_message() {
+        let cache = Cache {
+            dynamic_config: HashMap::new(),
+            groups: std::collections::BTreeMap::new(),
+            users: std::collections::BTreeMap::new(),
+        };
+        let mentions = HashSet::new();
+
+        let content = |content_type: &str, content: &str| ChatMessageContent {
+            properties: None,
+            content_type: content_type.to_string(),
+            content: content.to_string(),
+        };
+
+        // existing content types still produce a notification
+        assert_eq!(
+            content("text/plain", "hello").notify_message(&cache, &mentions),
+            Some("hello".to_string())
+        );
+        assert_eq!(
+            content("text/markdown", "# hi").notify_message(&cache, &mentions),
+            Some("You have a new message".to_string())
+        );
+        assert_eq!(
+            content("vachat/file", "2021/01/30/abc").notify_message(&cache, &mentions),
+            Some("You have a new file".to_string())
+        );
+
+        // agent process content does not notify
+        assert_eq!(
+            content("vachat/agent/thinking", "analyzing").notify_message(&cache, &mentions),
+            None
+        );
+        assert_eq!(
+            content("vachat/agent/tool_use", "search").notify_message(&cache, &mentions),
+            None
+        );
+        assert_eq!(
+            content("vachat/agent/tool_result", "tu_1").notify_message(&cache, &mentions),
+            None
+        );
+
+        // unknown / future agent types also do not notify
+        assert_eq!(
+            content("vachat/agent/status", "running").notify_message(&cache, &mentions),
+            None
+        );
+    }
 
     fn check_like_emoji(s: &str, r: bool) {
         assert_eq!(

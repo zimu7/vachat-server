@@ -11,3 +11,4 @@ wwwroot
 docs/book
 /docs/docs
 /cert/ca.crt
+/.codegraph

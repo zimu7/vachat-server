@@ -11,6 +11,7 @@
 //! - media: Media download endpoints
 
 mod account;
+mod agent_convert;
 pub(crate) mod auth;
 pub mod e2ee;
 mod keys;

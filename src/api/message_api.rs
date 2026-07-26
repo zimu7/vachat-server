@@ -401,4 +401,234 @@ mod tests {
         detail.get("content_type").assert_string("text/plain");
         detail.get("content").assert_string("d");
     }
+
+    #[tokio::test]
+    async fn test_agent_thinking() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let user1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let user1_token = server.login("user1@zimu.pub").await;
+        let mut user1_events = server.subscribe_events(&user1_token, Some(&["chat"])).await;
+
+        let resp = server
+            .post(format!("/api/user/{}/send", user1))
+            .header("X-API-Key", &admin_token)
+            .header("Referer", "http://localhost/")
+            .content_type("vachat/agent/thinking")
+            .body("analyzing the request")
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let mid = resp.json().await.value().i64();
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid);
+        msg.get("from_uid").assert_i64(1);
+        msg.get("target").object().get("uid").assert_i64(user1);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("normal");
+        detail.get("content_type").assert_string("vachat/agent/thinking");
+        detail.get("content").assert_string("analyzing the request");
+    }
+
+    #[tokio::test]
+    async fn test_agent_tool_use() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let user1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let user1_token = server.login("user1@zimu.pub").await;
+        let mut user1_events = server.subscribe_events(&user1_token, Some(&["chat"])).await;
+
+        let resp = server
+            .post(format!("/api/user/{}/send", user1))
+            .header("X-API-Key", &admin_token)
+            .header("Referer", "http://localhost/")
+            .content_type("vachat/agent/tool_use")
+            .body_json(&json!({
+                "name": "search",
+                "id": "tu_1",
+                "input": { "query": "rust" }
+            }))
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let mid = resp.json().await.value().i64();
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("normal");
+        detail.get("content_type").assert_string("vachat/agent/tool_use");
+        detail.get("content").assert_string("search");
+        let properties = detail.get("properties").object();
+        properties.get("id").assert_string("tu_1");
+        properties
+            .get("input")
+            .object()
+            .get("query")
+            .assert_string("rust");
+    }
+
+    #[tokio::test]
+    async fn test_agent_tool_result() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let user1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let user1_token = server.login("user1@zimu.pub").await;
+        let mut user1_events = server.subscribe_events(&user1_token, Some(&["chat"])).await;
+
+        let resp = server
+            .post(format!("/api/user/{}/send", user1))
+            .header("X-API-Key", &admin_token)
+            .header("Referer", "http://localhost/")
+            .content_type("vachat/agent/tool_result")
+            .body_json(&json!({
+                "tool_use_id": "tu_1",
+                "result": "found 3 hits",
+                "is_error": false
+            }))
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let mid = resp.json().await.value().i64();
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("normal");
+        detail.get("content_type").assert_string("vachat/agent/tool_result");
+        detail.get("content").assert_string("tu_1");
+        let properties = detail.get("properties").object();
+        properties.get("result").assert_string("found 3 hits");
+        properties.get("is_error").assert_bool(false);
+    }
+
+    #[tokio::test]
+    async fn test_agent_thinking_edit() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let user1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let user1_token = server.login("user1@zimu.pub").await;
+        let mut user1_events = server.subscribe_events(&user1_token, Some(&["chat"])).await;
+
+        // send a thinking message
+        let resp = server
+            .post(format!("/api/user/{}/send", user1))
+            .header("X-API-Key", &admin_token)
+            .header("Referer", "http://localhost/")
+            .content_type("vachat/agent/thinking")
+            .body("analyzing")
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let mid1 = resp.json().await.value().i64();
+
+        // consume the original thinking event
+        let _ = user1_events.next().await.unwrap();
+
+        // edit the thinking message incrementally
+        let resp = server
+            .put(format!("/api/message/{}/edit", mid1))
+            .header("X-API-Key", &admin_token)
+            .header("Referer", "http://localhost/")
+            .content_type("vachat/agent/thinking")
+            .body("extended thinking")
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let mid2 = resp.json().await.value().i64();
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid2);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("reaction");
+        detail.get("mid").assert_i64(mid1);
+        let reaction_detail = detail.get("detail").object();
+        reaction_detail.get("type").assert_string("edit");
+        reaction_detail
+            .get("content_type")
+            .assert_string("vachat/agent/thinking");
+        reaction_detail.get("content").assert_string("extended thinking");
+    }
+
+    #[tokio::test]
+    async fn test_reply_to_agent_tool_use() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let user1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let user1_token = server.login("user1@zimu.pub").await;
+        let mut user1_events = server.subscribe_events(&user1_token, Some(&["chat"])).await;
+
+        // admin sends a tool_use message to user1
+        let resp = server
+            .post(format!("/api/user/{}/send", user1))
+            .header("X-API-Key", &admin_token)
+            .header("Referer", "http://localhost/")
+            .content_type("vachat/agent/tool_use")
+            .body_json(&json!({
+                "name": "search",
+                "id": "tu_1",
+                "input": { "query": "rust" }
+            }))
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let mid1 = resp.json().await.value().i64();
+
+        // consume the tool_use event
+        let _ = user1_events.next().await.unwrap();
+
+        // admin replies to the tool_use message
+        let resp = server
+            .post(format!("/api/message/{}/reply", mid1))
+            .header("X-API-Key", &admin_token)
+            .header("Referer", "http://localhost/")
+            .content_type("text/plain")
+            .body("noted")
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let mid2 = resp.json().await.value().i64();
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid2);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("reply");
+        detail.get("mid").assert_i64(mid1);
+        detail.get("content_type").assert_string("text/plain");
+        detail.get("content").assert_string("noted");
+    }
+
+    #[tokio::test]
+    async fn test_markdown_send_unchanged() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let user1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let user1_token = server.login("user1@zimu.pub").await;
+        let mut user1_events = server.subscribe_events(&user1_token, Some(&["chat"])).await;
+
+        let resp = server
+            .post(format!("/api/user/{}/send", user1))
+            .header("X-API-Key", &admin_token)
+            .header("Referer", "http://localhost/")
+            .content_type("text/markdown")
+            .body("# Title")
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let mid = resp.json().await.value().i64();
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("normal");
+        detail.get("content_type").assert_string("text/markdown");
+        detail.get("content").assert_string("# Title");
+    }
 }

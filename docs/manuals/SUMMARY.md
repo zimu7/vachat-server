@@ -8,6 +8,7 @@
   - [Hermes](./agents/hermes.md)
   - [Qwenpaw](./agents/qwenpaw.md)
   - [Nanobot](./agents/nanobot.md)
+  - [消息内容类型](./agents/content-types.md)
 - [通过cc-connect接入智能体](./cc-connect.md)
 - [https配置](./https.md)
 - [nginx配置](./nginx.md)

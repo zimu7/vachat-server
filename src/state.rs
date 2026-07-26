@@ -150,6 +150,10 @@ pub struct CacheUser {
     pub is_guest: bool,
     pub webhook_url: Option<String>,
     pub is_bot: bool,
+    /// Agent type for bots (e.g. "qwenpaw", "hermes", "cc_connect"), used by the
+    /// Matrix bridge to dispatch to the right content-type converter. None for
+    /// non-bots or unconfigured bots.
+    pub agent_type: Option<String>,
     pub bot_keys: HashMap<i64, BotKey>,
     /// Whether the bot is currently connected via Matrix protocol
     pub bot_online: bool,
@@ -207,6 +211,7 @@ impl CacheUser {
             status: self.status,
             webhook_url: self.webhook_url.clone(),
             is_bot: self.is_bot,
+            agent_type: self.agent_type.clone(),
         }
     }
 
@@ -408,7 +413,7 @@ pub struct State {
 impl State {
     pub async fn load_users_cache(db: &SqlitePool) -> sqlx::Result<BTreeMap<i64, CacheUser>> {
         let mut users = BTreeMap::new();
-        let sql = "select uid, email, name, password, gender, is_admin, language, create_by, created_at, updated_at, avatar_updated_at, status, is_guest, webhook_url, is_bot from user";
+        let sql = "select uid, email, name, password, gender, is_admin, language, create_by, created_at, updated_at, avatar_updated_at, status, is_guest, webhook_url, is_bot, agent_type from user";
         let mut stream = sqlx::query_as::<
             _,
             (
@@ -427,6 +432,7 @@ impl State {
                 bool,
                 Option<String>,
                 bool,
+                Option<String>,
             ),
         >(sql)
         .fetch(db);
@@ -447,6 +453,7 @@ impl State {
                 is_guest,
                 webhook_url,
                 is_bot,
+                agent_type,
             ) = res?;
 
             let devices = sqlx::query_as::<_, (String, Option<String>)>(
@@ -610,6 +617,7 @@ impl State {
                     is_guest,
                     webhook_url,
                     is_bot,
+                    agent_type,
                     bot_keys,
                     bot_online: false,
                 },
