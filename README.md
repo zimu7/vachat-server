@@ -213,3 +213,7 @@ access_token = "syt_xxx_xxx"
 # group_reply_all = false               # respond to all messages in group rooms
 # proxy = ""                            # HTTP/SOCKS5 proxy
 ```
+
+## 设置智能体类型
+
+cc-connect 的消息用 emoji 标记不同类型：`💭` 思考、`🔧` 工具调用、`🧾` 工具结果、`❌` 错误。为了让 VaChat 正确区分这些过程性内容（思考/工具调用/工具结果折叠展示且不触发推送），在管理端 **设置 -> 成员** 中编辑 cc-connect 机器人，将其 **智能体类型（agent_type）** 设为 `cc_connect`。未设置时其消息按普通文本处理。详见 [智能体消息内容类型](./docs/manuals/agents/content-types.md)。

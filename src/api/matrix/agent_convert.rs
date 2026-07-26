@@ -18,9 +18,12 @@
 //!    inference function to apply. Add a new agent by implementing its `infer`
 //!    and adding a `match` arm in [`convert_agent_matrix_content`].
 //!
-//! `thinking` is not distinguished from the final answer yet; both fall through
-//! to `text/markdown` / `text/plain`. Inferred `tool_use` / `tool_result` carry
-//! no `id`, so they correlate by tool name (soft association).
+//! `thinking` is distinguished from the final answer only when the agent marks
+//! it explicitly: cc-connect prefixes thinking with `💭`, so it maps to
+//! `vachat/agent/thinking`; QwenPaw / Hermes do not mark thinking yet, so it
+//! falls through to `text/markdown` / `text/plain`. Inferred `tool_use` /
+//! `tool_result` carry no `id`, so they correlate by tool name / order (soft
+//! association).
 
 use std::collections::HashMap;
 
@@ -252,14 +255,160 @@ mod hermes {
 
 /// cc-connect (Claude Code) message format.
 ///
-/// Not yet characterized. If cc-connect shares QwenPaw's `🔧`/`✅` rendering,
-/// route it through [`super::qwenpaw::infer`] instead of implementing a
-/// duplicate here.
+/// cc-connect (a mautrix-go based bridge) marks each message type with a
+/// leading emoji in the Matrix `body`:
+///
+/// - `💭 <text>` -- thinking / reasoning.
+/// - `🔧 **Tool #<n>: <Name>**` on its own line, followed by a `---` line and
+///   the tool input (a fenced code block for `Bash`, an inline `` `code` ``
+///   span for `Read`, ...) -- a tool call.
+/// - `🧾` on its own line, followed by `🟢 Status: <ok|error>`, `🔢 Exit:
+///   <code>`, and a fenced ```text``` block holding the output -- a tool
+///   result.
+/// - `❌ Error: <msg>` -- an error (left as prose so it still notifies).
+/// - No emoji prefix -- the final answer (prose).
+///
+/// Because the `💭` prefix is explicit, cc-connect is one agent where thinking
+/// *is* reliably distinguished from the final answer. Inferred `tool_use` /
+/// `tool_result` carry no `id`, so they correlate by tool name / order (soft
+/// association, same as QwenPaw).
 mod cc_connect {
     use super::*;
 
-    pub fn infer(_body: &str) -> Option<ChatMessageContent> {
+    /// `🔧 **Tool #<n>: <Name>**` (or `🔧 **<Name>**`) header at the start.
+    static TOOL_USE_HEADER_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^🔧\s*\*\*(?P<name>[^*]+)\*\*").unwrap());
+
+    /// `Tool #<n>: ` prefix cc-connect prepends to the tool name.
+    static TOOL_NUMBER_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^Tool #\d+\s*:\s*").unwrap());
+
+    /// First fenced code block (triple backtick, optional language tag).
+    static FENCED_CODE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?s)```[^\n]*\n(?P<code>.*?)```").unwrap());
+
+    /// `Status: <status>` line of a tool result (prefixed by 🟢/🔴).
+    static STATUS_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?m)^.*Status:\s*(?P<status>\S+)").unwrap());
+
+    pub fn infer(body: &str) -> Option<ChatMessageContent> {
+        // Thinking: `💭 <text>` -- explicit marker, so thinking is distinguished
+        // from the final answer (unlike QwenPaw, where it is not).
+        if let Some(rest) = body.strip_prefix("💭") {
+            let text = rest.strip_prefix(' ').unwrap_or(rest);
+            return Some(ChatMessageContent {
+                properties: None,
+                content_type: "vachat/agent/thinking".to_string(),
+                content: text.to_string(),
+            });
+        }
+
+        // Tool use: `🔧 **Tool #<n>: <Name>**` + `---` + input.
+        if let Some(out) = try_tool_use(body) {
+            return Some(out);
+        }
+
+        // Tool result: `🧾` + status/exit + result code block.
+        if body.starts_with("🧾") {
+            return Some(try_tool_result(body));
+        }
+
+        // `❌ Error: ...` and the final answer have no process marker: leave
+        // them as prose (so the error / answer still triggers a notification).
         None
+    }
+
+    fn try_tool_use(body: &str) -> Option<ChatMessageContent> {
+        let caps = TOOL_USE_HEADER_RE.captures(body)?;
+        let raw_name = caps
+            .name("name")
+            .map(|m| m.as_str().trim())
+            .unwrap_or("");
+        // Strip cc-connect's `Tool #<n>: ` prefix to get the bare tool name.
+        let name = TOOL_NUMBER_RE.replace(raw_name, "").to_string();
+        let properties = extract_input(body).map(|input| {
+            let mut map = HashMap::new();
+            map.insert("input".to_string(), Value::String(input));
+            map
+        });
+        Some(ChatMessageContent {
+            properties,
+            content_type: "vachat/agent/tool_use".to_string(),
+            content: name,
+        })
+    }
+
+    fn try_tool_result(body: &str) -> ChatMessageContent {
+        let is_error = STATUS_RE
+            .captures(body)
+            .and_then(|c| c.name("status").map(|m| m.as_str()))
+            .map(|s| s != "ok");
+
+        let result = extract_first_code_block(body)
+            .or_else(|| {
+                // Fallback when there is no code block: the text after the
+                // leading `🧾` line, trimmed.
+                body.strip_prefix("🧾").map(|rest| rest.trim().to_string())
+            })
+            .filter(|s| !s.is_empty());
+
+        let properties = result.map(|r| {
+            let mut map = HashMap::new();
+            map.insert("result".to_string(), Value::String(r));
+            if let Some(err) = is_error {
+                map.insert("is_error".to_string(), Value::Bool(err));
+            }
+            map
+        });
+
+        // cc-connect's tool result carries no id or tool name, so there is
+        // nothing to correlate on within the message itself; the frontend
+        // associates it with the preceding `tool_use` by order.
+        ChatMessageContent {
+            properties,
+            content_type: "vachat/agent/tool_result".to_string(),
+            content: String::new(),
+        }
+    }
+
+    /// Extract the tool input: the text after the `---` separator line that
+    /// follows the header (falling back to the text after the header line when
+    /// there is no separator). Unwrap a fenced code block or an inline
+    /// `` `code` `` span when present; otherwise use the trimmed text.
+    fn extract_input(body: &str) -> Option<String> {
+        let lines: Vec<&str> = body.split('\n').collect();
+        let region = match lines.iter().position(|l| l.trim() == "---") {
+            Some(pos) => lines[pos + 1..].join("\n"),
+            // No separator: skip the header line itself.
+            None => lines.get(1..).map(|ls| ls.join("\n")).unwrap_or_default(),
+        };
+        extract_input_region(&region)
+    }
+
+    fn extract_input_region(region: &str) -> Option<String> {
+        let region = region.trim();
+        if region.is_empty() {
+            return None;
+        }
+        // Fenced code block (e.g. ```bash ... ```).
+        if let Some(code) = extract_first_code_block(region) {
+            return Some(code);
+        }
+        // Inline code span: `...`.
+        if let Some(rest) = region.strip_prefix('`') {
+            if let Some(end) = rest.find('`') {
+                return Some(rest[..end].to_string());
+            }
+        }
+        // Plain text.
+        Some(region.to_string())
+    }
+
+    /// Extract the inner content of the first fenced code block, trimmed.
+    fn extract_first_code_block(body: &str) -> Option<String> {
+        let caps = FENCED_CODE_RE.captures(body)?;
+        let code = caps.name("code")?.as_str();
+        Some(code.trim().to_string())
     }
 }
 
@@ -356,6 +505,139 @@ mod tests {
         let out = convert_agent_matrix_content(
             &text_content("The user wants to know the time in New York."),
             Some("qwenpaw"),
+        );
+        assert_eq!(out.content_type, "text/plain");
+    }
+
+    // ---- Layer 2: cc-connect inference (dispatched by agent_type) ----
+
+    #[test]
+    fn cc_connect_thinking() {
+        let out =
+            convert_agent_matrix_content(&text_content("💭 analyzing the request"), Some("cc_connect"));
+        assert_eq!(out.content_type, "vachat/agent/thinking");
+        assert_eq!(out.content, "analyzing the request");
+        assert!(out.properties.is_none());
+    }
+
+    #[test]
+    fn cc_connect_thinking_multiline() {
+        // Captured from a real cc-connect turn: thinking spans multiple lines.
+        let body = "💭 The user is asking what time it is now in New York, USA. Let me check the current time.\n\nI can use the date command to get the current time in New York timezone.";
+        let out = convert_agent_matrix_content(&text_content(body), Some("cc_connect"));
+        assert_eq!(out.content_type, "vachat/agent/thinking");
+        assert!(out.content.starts_with("The user is asking"));
+        assert!(out.content.contains("I can use the date command"));
+    }
+
+    #[test]
+    fn cc_connect_tool_use_bash() {
+        // Captured from a real cc-connect turn: Bash tool call.
+        let body = "🔧 **Tool #1: Bash**\n---\n```bash\nTZ='America/New_York' date '+%Y-%m-%d %H:%M:%S %Z (%A)'\n```";
+        let out = convert_agent_matrix_content(&text_content(body), Some("cc_connect"));
+        assert_eq!(out.content_type, "vachat/agent/tool_use");
+        assert_eq!(out.content, "Bash");
+        let properties = out.properties.expect("properties");
+        let input = properties.get("input").unwrap().as_str().unwrap();
+        assert!(input.contains("TZ='America/New_York'"));
+    }
+
+    #[test]
+    fn cc_connect_tool_use_read_inline_code() {
+        // Captured from a real cc-connect turn: Read tool call uses an inline
+        // code span for the path rather than a fenced code block.
+        let body = "🔧 **Tool #2: Read**\n---\n`d:\\workspace\\liwenbo\\vachat\\vachat-server\\README.md`";
+        let out = convert_agent_matrix_content(&text_content(body), Some("cc_connect"));
+        assert_eq!(out.content_type, "vachat/agent/tool_use");
+        assert_eq!(out.content, "Read");
+        assert_eq!(
+            out.properties
+                .expect("properties")
+                .get("input")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "d:\\workspace\\liwenbo\\vachat\\vachat-server\\README.md"
+        );
+    }
+
+    #[test]
+    fn cc_connect_tool_use_strips_tool_number() {
+        // Without the `Tool #<n>: ` prefix, the whole bold text is the name.
+        let body = "🔧 **Bash**\n---\n```bash\nls\n```";
+        let out = convert_agent_matrix_content(&text_content(body), Some("cc_connect"));
+        assert_eq!(out.content, "Bash");
+    }
+
+    #[test]
+    fn cc_connect_tool_use_no_input() {
+        // Header only: still a tool_use, just without input.
+        let out =
+            convert_agent_matrix_content(&text_content("🔧 **Tool #1: Bash**"), Some("cc_connect"));
+        assert_eq!(out.content_type, "vachat/agent/tool_use");
+        assert_eq!(out.content, "Bash");
+        assert!(out.properties.is_none());
+    }
+
+    #[test]
+    fn cc_connect_tool_result() {
+        // Captured from a real cc-connect turn.
+        let body = "🧾\n🟢 Status: ok\n🔢 Exit: 0\n```text\n2026-07-26 04:40:25 GMT (Sunday)\n```";
+        let out = convert_agent_matrix_content(&text_content(body), Some("cc_connect"));
+        assert_eq!(out.content_type, "vachat/agent/tool_result");
+        assert_eq!(out.content, "");
+        let props = out.properties.expect("properties");
+        assert_eq!(
+            props.get("result").unwrap().as_str().unwrap(),
+            "2026-07-26 04:40:25 GMT (Sunday)"
+        );
+        assert_eq!(props.get("is_error").unwrap(), false);
+    }
+
+    #[test]
+    fn cc_connect_tool_result_multiline_output() {
+        // Captured from a real cc-connect turn (ls-style output with CRLF/line
+        // numbers stripped by trim).
+        let body = "🧾\n🟢 Status: ok\n🔢 Exit: 0\n```text\n-rw-r--r-- 1 liwenbo 197121   7338 Jun 30 19:24 README.md\n```";
+        let out = convert_agent_matrix_content(&text_content(body), Some("cc_connect"));
+        assert_eq!(out.content_type, "vachat/agent/tool_result");
+        assert_eq!(
+            out.properties
+                .expect("properties")
+                .get("result")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "-rw-r--r-- 1 liwenbo 197121   7338 Jun 30 19:24 README.md"
+        );
+    }
+
+    #[test]
+    fn cc_connect_tool_result_error_status() {
+        let body = "🧾\n🔴 Status: error\n🔢 Exit: 1\n```text\ncommand not found\n```";
+        let out = convert_agent_matrix_content(&text_content(body), Some("cc_connect"));
+        assert_eq!(out.content_type, "vachat/agent/tool_result");
+        let props = out.properties.expect("properties");
+        assert_eq!(props.get("is_error").unwrap(), true);
+        assert_eq!(props.get("result").unwrap().as_str().unwrap(), "command not found");
+    }
+
+    #[test]
+    fn cc_connect_error_stays_prose() {
+        // `❌ Error: ...` has no process marker: stays prose so it still notifies.
+        let out = convert_agent_matrix_content(
+            &text_content("❌ Error: failed to start agent session"),
+            Some("cc_connect"),
+        );
+        assert_eq!(out.content_type, "text/plain");
+        assert_eq!(out.content, "❌ Error: failed to start agent session");
+    }
+
+    #[test]
+    fn cc_connect_final_answer_stays_prose() {
+        let out = convert_agent_matrix_content(
+            &text_content("现在是美国纽约时间 **2026年7月26日** 🗽"),
+            Some("cc_connect"),
         );
         assert_eq!(out.content_type, "text/plain");
     }

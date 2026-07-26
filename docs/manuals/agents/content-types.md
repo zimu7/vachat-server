@@ -111,11 +111,20 @@ QwenPaw、Hermes、cc-connect 等智能体通过 Matrix 协议接入，其消息
 - `✅ **<工具名>**` 后跟 ``` 代码块 -> `vachat/agent/tool_result`（`content`=工具名，`properties.result`=代码块内容）。
 - 其余散文 -> `text/markdown`（事件带 `format` 时）或 `text/plain`。
 
-Hermes、cc-connect 的推断规则待补（格式样本待采集）；在此之前其消息回落为散文。
+**cc-connect**（`agent_type=cc_connect`，Claude Code 等）的格式——每类消息以一个 emoji 开头：
+
+- `💭 <思考文本>` -> `vachat/agent/thinking`（`content`=去掉 `💭 ` 前缀的思考文本，可跨行）。
+- `🔧 **Tool #<序号>: <工具名>**` 一行，后跟 `---` 分隔行和工具输入 -> `vachat/agent/tool_use`（`content`=工具名，去掉 `Tool #<序号>: ` 前缀；`properties.input`=输入，优先取 ``` 代码块内容，其次取 `` `内联代码` ``，否则取 `---` 后的纯文本）。
+- `🧾` 一行，后跟 `🟢 Status: <ok|error>`、`🔢 Exit: <码>` 和 ``` 代码块 -> `vachat/agent/tool_result`（`content`=空，cc-connect 的结果不带 id/工具名，前端按顺序与上一个 `tool_use` 关联；`properties.result`=代码块内容，`properties.is_error`=`Status` 不为 `ok` 时为 `true`）。
+- `❌ Error: <文本>` 与无 emoji 前缀的最终回答 -> 散文（`text/markdown`/`text/plain`），仍触发推送。
+
+cc-connect 的 `💭` 前缀是显式标记，因此其思考可与最终回答区分（区别于 QwenPaw/Hermes）。
+
+Hermes 的推断规则待补（格式样本待采集）；在此之前其消息回落为散文。
 
 ### 限制
 
 - **推断的 tool_use / tool_result 没有 `id`**，按工具名软关联（与上文"id 软关联、客户端自行保证"一致）。
-- **thinking 暂不与最终回答区分**：两者都是散文，当前都按 `text/markdown` / `text/plain` 对待。等接入更多智能体、明确各自的标记后再细化。
+- **thinking 是否与最终回答区分取决于智能体**：cc-connect 以 `💭` 显式标记思考，可区分；QwenPaw/Hermes 暂无标记，两者都按 `text/markdown` / `text/plain` 对待。等明确各自的标记后再细化（如序列降级）。
 - 显式信号（Layer 1）优先于推断（Layer 2）。
 
