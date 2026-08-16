@@ -76,9 +76,16 @@ Content-Type: vachat/agent/tool_result
 {"tool_use_id":"tu_1","result":"found 3 hits","is_error":false}
 ```
 
+### `vachat/agent/status`
+
+智能体的活动状态（如"正在搜索""正在读取网页"）。Hermes 经 Matrix 桥接推断生成，通常作为一条消息被智能体反复编辑、逐行累加活动项。
+
+- `content`：活动行文本（多行，每行保留行首 emoji，如 `🔍 Searching the web for ...`，前端按行渲染）。
+- `properties`：可选。
+
 ## 命名空间可扩展性
 
-`vachat/agent/*` 命名空间可扩展。未来新增过程类型（如 `vachat/agent/status`、`vachat/agent/citation`）只需新增 `content_type` 取值，结构化数据承载于 `properties`，无需变更消息结构或数据库 schema。未知的 `vachat/agent/*` 取值同样不触发推送通知。
+`vachat/agent/*` 命名空间可扩展。未来新增过程类型（如 `vachat/agent/citation`）只需新增 `content_type` 取值，结构化数据承载于 `properties`，无需变更消息结构或数据库 schema。未知的 `vachat/agent/*` 取值同样不触发推送通知。
 
 ## Matrix 智能体接入的内容转换
 
@@ -120,7 +127,20 @@ QwenPaw、Hermes、cc-connect 等智能体通过 Matrix 协议接入，其消息
 
 cc-connect 的 `💭` 前缀是显式标记，因此其思考可与最终回答区分（区别于 QwenPaw/Hermes）。
 
-Hermes 的推断规则待补（格式样本待采集）；在此之前其消息回落为散文。
+**Hermes**（`agent_type=hermes`，Nous Research 的 mautrix-python 桥接）的格式：
+
+- 首行以活动 emoji 开头（`🔍 Searching the web for ...` 网络搜索、`📄 Reading <url>` 读取网页） -> `vachat/agent/status`（`content`=活动行全文，逐行 emoji 保留；推断前先剥离 Matrix 编辑回退体上的 `* ` 前缀）。
+- `💻 <工具名>` 一行，后跟 ``` 代码块 -> `vachat/agent/tool_use`（`content`=工具名，`properties.input`=代码块内容；旧版 Hermes 格式，保留兼容）。
+- 其余散文（最终回答、`📬`/`♻️`/`⚠️` 等系统消息） -> `text/markdown`（事件带 `format` 时，Hermes 通常带）或 `text/plain`。
+
+Hermes 把活动状态作为**一条消息逐步编辑**：先发一条单行活动消息，之后每次新增活动行都通过 Matrix 的 `m.replace` 编辑该消息（见下节）。观察到的 Hermes 流量中，工具结果由智能体内部消化后直接回复最终回答，**不通过 Matrix 回传 `tool_result`**；思考也无显式标记，故两者均回落散文。后续若采集到新活动 emoji，扩充 `agent_convert.rs` 中 hermes 模块的 `ACTIVITY_EMOJIS`。
+
+### Matrix `m.replace` 编辑的处理
+
+智能体（如 Hermes）通过 Matrix 的 `m.relates_to`/`m.replace` 机制编辑已发送的消息。桥接识别 `rel_type = "m.replace"` 且 `event_id` 形如 `$<mid>`（服务端发出的 event_id 即 `$mid`）的事件，取 `m.new_content`（缺失时回退到事件本身，其 `body` 带 Matrix 的 `* ` 编辑标记，由推断器剥离）转换后，**按 `PUT /message/:mid/edit` 相同的形态存为对原 mid 的编辑反应**（`MessageDetail::Reaction` / `edit`），而非新建消息。校验规则：
+
+- 原消息必须存在，且与编辑事件出自同一作者（`from_uid` 一致），否则回落为一条新的普通消息（不丢编辑内容）。
+- `m.in_reply_to` 等其他 `m.relates_to` 用途不视为编辑。
 
 ### 限制
 

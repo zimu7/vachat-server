@@ -87,7 +87,10 @@ impl ChatMessageContent {
             }
             "text/markdown" => Some("You have a new message".to_string()),
             "vachat/file" => Some("You have a new file".to_string()),
-            "vachat/agent/thinking" | "vachat/agent/tool_use" | "vachat/agent/tool_result" => None,
+            "vachat/agent/thinking"
+            | "vachat/agent/tool_use"
+            | "vachat/agent/tool_result"
+            | "vachat/agent/status" => None,
             _ => None,
         }
     }

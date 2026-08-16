@@ -21,9 +21,10 @@
 //! `thinking` is distinguished from the final answer only when the agent marks
 //! it explicitly: cc-connect prefixes thinking with `💭`, so it maps to
 //! `vachat/agent/thinking`; QwenPaw / Hermes do not mark thinking yet, so it
-//! falls through to `text/markdown` / `text/plain`. Inferred `tool_use` /
-//! `tool_result` carry no `id`, so they correlate by tool name / order (soft
-//! association).
+//! falls through to `text/markdown` / `text/plain`. Hermes reports agent
+//! activity as an accumulating status message (`🔍` / `📄` activity lines),
+//! mapped to `vachat/agent/status`. Inferred `tool_use` / `tool_result` carry
+//! no `id`, so they correlate by tool name / order (soft association).
 
 use std::collections::HashMap;
 
@@ -240,16 +241,99 @@ mod qwenpaw {
 
 /// Hermes agent message format.
 ///
-/// Not yet characterized: the Hermes manual only documents installation and
-/// Matrix configuration, not its message rendering. [`infer`] returns `None` so
-/// Hermes messages fall through to prose (`text/markdown` / `text/plain`).
-/// Provide a sample Hermes turn (thinking / tool_use / tool_result / answer) to
-/// implement this.
+/// Hermes (a mautrix-python bridge) reports agent activity as one accumulating
+/// status message: it first sends a single activity line -- `🔍 <what>` for a
+/// web search, `📄 <url>` for reading a page -- and then extends it by editing
+/// that message over Matrix (`m.relates_to` / `m.replace`, handled in
+/// [`super::rooms`]), one more activity line per edit. Older Hermes builds
+/// instead marked a terminal tool call with a `💻 <tool>` line followed by a
+/// fenced code block holding the tool input:
+///
+/// ```text
+/// 💻 terminal
+/// ```
+/// TZ='America/New_York' date
+/// ```
+/// ```
+///
+/// Inference rules (applied after stripping Matrix's `* ` edit marker, which
+/// prefixes the fallback body of an edit event that carries no
+/// `m.new_content`):
+///
+/// - `💻 <tool>` header + fenced code block -> `vachat/agent/tool_use`
+///   (`content` = tool name, `properties.input` = the code-block input; no
+///   `id`, correlating by tool name / order like QwenPaw / cc-connect).
+/// - Body whose first line starts with an activity emoji -> `vachat/agent/status`
+///   (`content` = the activity lines, per-line emojis kept so the frontend can
+///   render each line with its icon).
+///
+/// Hermes does not relay tool results or thinking back over Matrix in observed
+/// traffic (it consumes results internally and replies with the final answer),
+/// so there is no `tool_result` / `thinking` inference. If later samples reveal
+/// more activity emojis, extend `ACTIVITY_EMOJIS`.
 mod hermes {
     use super::*;
 
-    pub fn infer(_body: &str) -> Option<ChatMessageContent> {
-        None
+    /// `💻 <tool>` header at the start of the body -> tool_use.
+    static TOOL_USE_HEADER_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^💻\s*(?P<name>.+)").unwrap());
+
+    /// First fenced code block (triple backtick, optional language tag).
+    static FENCED_CODE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?s)```[^\n]*\n(?P<code>.*?)```").unwrap());
+
+    /// Emojis Hermes prefixes activity lines with: 🔍 web search, 📄 read a
+    /// page. Extend as new samples arrive.
+    const ACTIVITY_EMOJIS: &[&str] = &["🔍", "📄"];
+
+    pub fn infer(body: &str) -> Option<ChatMessageContent> {
+        // Edit events fall back to the outer body (marked `* ` by Matrix) when
+        // the client omits m.new_content; infer on the unmarked body.
+        let body = body.strip_prefix("* ").unwrap_or(body);
+        try_tool_use(body).or_else(|| try_status(body))
+    }
+
+    fn try_tool_use(body: &str) -> Option<ChatMessageContent> {
+        let caps = TOOL_USE_HEADER_RE.captures(body)?;
+        let name = caps
+            .name("name")
+            .map(|m| m.as_str().trim())
+            .unwrap_or("")
+            .to_string();
+        let properties = extract_first_code_block(body).map(|code| {
+            let mut map = HashMap::new();
+            map.insert("input".to_string(), Value::String(code));
+            map
+        });
+        Some(ChatMessageContent {
+            properties,
+            content_type: "vachat/agent/tool_use".to_string(),
+            content: name,
+        })
+    }
+
+    /// An accumulating activity message: the first line starts with an activity
+    /// emoji (each line keeps its own emoji for the frontend to render).
+    fn try_status(body: &str) -> Option<ChatMessageContent> {
+        let first_line = body.lines().next()?;
+        if !ACTIVITY_EMOJIS
+            .iter()
+            .any(|emoji| first_line.starts_with(emoji))
+        {
+            return None;
+        }
+        Some(ChatMessageContent {
+            properties: None,
+            content_type: "vachat/agent/status".to_string(),
+            content: body.to_string(),
+        })
+    }
+
+    /// Extract the inner content of the first fenced code block, trimmed.
+    fn extract_first_code_block(body: &str) -> Option<String> {
+        let caps = FENCED_CODE_RE.captures(body)?;
+        let code = caps.name("code")?.as_str();
+        Some(code.trim().to_string())
     }
 }
 
@@ -638,6 +722,125 @@ mod tests {
         let out = convert_agent_matrix_content(
             &text_content("现在是美国纽约时间 **2026年7月26日** 🗽"),
             Some("cc_connect"),
+        );
+        assert_eq!(out.content_type, "text/plain");
+    }
+
+    // ---- Layer 2: Hermes inference (dispatched by agent_type) ----
+
+    #[test]
+    fn hermes_tool_use_terminal() {
+        // Captured from a real Hermes turn: terminal tool call.
+        let body = "💻 terminal\n```\nTZ='America/New_York' date\n```";
+        let out = convert_agent_matrix_content(&text_content(body), Some("hermes"));
+        assert_eq!(out.content_type, "vachat/agent/tool_use");
+        assert_eq!(out.content, "terminal");
+        let properties = out.properties.expect("properties");
+        assert_eq!(
+            properties.get("input").unwrap().as_str().unwrap(),
+            "TZ='America/New_York' date"
+        );
+    }
+
+    #[test]
+    fn hermes_tool_use_code_block_with_language_tag() {
+        // A language tag on the fence should not leak into the input.
+        let body = "💻 terminal\n```bash\necho hi\n```";
+        let out = convert_agent_matrix_content(&text_content(body), Some("hermes"));
+        assert_eq!(out.content_type, "vachat/agent/tool_use");
+        assert_eq!(out.content, "terminal");
+        assert_eq!(
+            out.properties
+                .expect("properties")
+                .get("input")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "echo hi"
+        );
+    }
+
+    #[test]
+    fn hermes_tool_use_no_code_block() {
+        // Header only: still a tool_use, just without input.
+        let out = convert_agent_matrix_content(&text_content("💻 terminal"), Some("hermes"));
+        assert_eq!(out.content_type, "vachat/agent/tool_use");
+        assert_eq!(out.content, "terminal");
+        assert!(out.properties.is_none());
+    }
+
+    #[test]
+    fn hermes_final_answer_stays_prose() {
+        // Captured from a real Hermes turn: final answer is markdown (has format).
+        let c = json!({
+            "msgtype": "m.text",
+            "body": "现在美国纽约的时间是 **2026年7月26日 凌晨 5:02** (EDT)。",
+            "format": "org.matrix.custom.html",
+            "formatted_body": "现在美国纽约的时间是 <strong>2026年7月26日 凌晨 5:02</strong> (EDT)。"
+        });
+        let out = convert_agent_matrix_content(&c, Some("hermes"));
+        assert_eq!(out.content_type, "text/markdown");
+    }
+
+    #[test]
+    fn hermes_status_first_activity_line() {
+        // Captured from a real Hermes turn: the status message starts as a
+        // single 🔍 activity line.
+        let body = "🔍 Searching the web for 武汉明天天气预报 2026年7月27日";
+        let out = convert_agent_matrix_content(&text_content(body), Some("hermes"));
+        assert_eq!(out.content_type, "vachat/agent/status");
+        assert_eq!(out.content, body);
+        assert!(out.properties.is_none());
+    }
+
+    #[test]
+    fn hermes_status_read_page_activity_line() {
+        // 📄 (reading a page) is an activity line too, even before any 🔍 line.
+        let body = "📄 Reading https://www.weather.com.cn/weather/101201401.shtml";
+        let out = convert_agent_matrix_content(&text_content(body), Some("hermes"));
+        assert_eq!(out.content_type, "vachat/agent/status");
+        assert_eq!(out.content, body);
+    }
+
+    #[test]
+    fn hermes_status_edit_marker_stripped() {
+        // Captured from a real Hermes turn: an edit event whose fallback body
+        // carries Matrix's `* ` marker and accumulates several activity lines.
+        // The marker is stripped; the per-line emojis are kept for rendering.
+        let body = "* 🔍 Searching the web for 武汉明天天气预报 2026年7月27日\n📄 Reading https://www.weather.com.cn/weather/10...\n🔍 Searching the web for Wuhan weather forecast July 27 2026";
+        let out = convert_agent_matrix_content(&text_content(body), Some("hermes"));
+        assert_eq!(out.content_type, "vachat/agent/status");
+        assert!(out.content.starts_with("🔍 Searching the web"));
+        assert!(out.content.contains("📄 Reading https://www.weather.com.cn"));
+        assert!(!out.content.starts_with("* "));
+    }
+
+    #[test]
+    fn hermes_status_from_new_content_has_no_marker() {
+        // m.new_content bodies have no `* ` marker; inference is unchanged.
+        let body = "🔍 Searching the web for 武汉明天天气预报 2026年7月27日\n📄 Reading https://www.weather.com.cn/weather/10...";
+        let out = convert_agent_matrix_content(&text_content(body), Some("hermes"));
+        assert_eq!(out.content_type, "vachat/agent/status");
+        assert_eq!(out.content, body);
+    }
+
+    #[test]
+    fn hermes_status_emoji_in_prose_not_confused() {
+        // An emoji appearing mid-prose (not leading the first line) is not a
+        // status message.
+        let out = convert_agent_matrix_content(
+            &text_content("Here is what I found 🔍: it will rain tomorrow."),
+            Some("hermes"),
+        );
+        assert_eq!(out.content_type, "text/plain");
+    }
+
+    #[test]
+    fn hermes_thinking_not_distinguished() {
+        // Hermes does not mark thinking (like QwenPaw): stays prose.
+        let out = convert_agent_matrix_content(
+            &text_content("The user wants the time in New York. I'll use the terminal tool."),
+            Some("hermes"),
         );
         assert_eq!(out.content_type, "text/plain");
     }

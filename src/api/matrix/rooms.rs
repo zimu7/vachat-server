@@ -13,7 +13,8 @@ use sha2::Sha256;
 use vodozemac::olm::{Message, OlmMessage, PreKeyMessage, Session as OlmSession};
 
 use crate::api::message::{
-    send_message, ChatMessagePayload, MessageDetail, MessageTarget,
+    send_message, ChatMessagePayload, MessageDetail, MessageReaction, MessageReactionDetail,
+    MessageReactionEdit, MessageTarget,
 };
 use crate::api::DateTime;
 use crate::state::State;
@@ -778,9 +779,83 @@ fn parse_room_target(
     }
 }
 
-/// Handle Matrix send message request
-async fn handle_send_message(
+/// Parse an `m.replace` edit event: returns the (original mid, replacement
+/// content object).
+///
+/// The server hands out `event_id = "$<mid>"`, so the referenced event id maps
+/// back to a vachat mid directly. When the client omits `m.new_content`
+/// (non-conforming), fall back to the whole event object -- its `body` then
+/// carries Matrix's `* ` edit marker, which the per-agent inference strips.
+/// Other `m.relates_to` uses (e.g. `m.in_reply_to`) return `None`.
+fn matrix_replace(matrix_msg: &Value) -> Option<(i64, &Value)> {
+    let relates_to = matrix_msg.get("m.relates_to")?;
+    if relates_to.get("rel_type").and_then(|v| v.as_str()) != Some("m.replace") {
+        return None;
+    }
+    let event_id = relates_to.get("event_id").and_then(|v| v.as_str())?;
+    let mid = event_id.strip_prefix('$')?.parse().ok()?;
+    let new_content = matrix_msg.get("m.new_content").unwrap_or(matrix_msg);
+    Some((mid, new_content))
+}
+
+/// Convert and store an agent Matrix message, honoring `m.replace` edits.
+///
+/// A plain event is stored as a new normal message. An edit event (rel_type
+/// `m.replace`) is stored as a message-edit reaction on the original mid (the
+/// same shape `PUT /message/:mid/edit` produces), provided the same author sent
+/// the original message; otherwise it falls back to a new normal message so no
+/// edit is lost. `author_uid` is the uid the stored message is attributed to
+/// (the Matrix client's uid on this server).
+async fn store_agent_matrix_message(
     state: &State,
+    matrix_msg: &Value,
+    agent_type: Option<&str>,
+    author_uid: i64,
+    target: MessageTarget,
+) -> poem::Result<i64> {
+    if let Some((orig_mid, new_content)) = matrix_replace(matrix_msg) {
+        let editable = state
+            .msg_db
+            .messages()
+            .get(orig_mid)
+            .map_err(InternalServerError)?
+            .and_then(|data| serde_json::from_slice::<ChatMessagePayload>(&data).ok())
+            .is_some_and(|orig| orig.from_uid == author_uid);
+        if editable {
+            let content = agent_convert::convert_agent_matrix_content(new_content, agent_type);
+            let edit_payload = ChatMessagePayload {
+                from_uid: author_uid,
+                created_at: DateTime::now(),
+                target,
+                detail: MessageDetail::Reaction(MessageReaction {
+                    mid: orig_mid,
+                    detail: MessageReactionDetail::Edit(MessageReactionEdit { content }),
+                }),
+            };
+            return send_message(state, edit_payload).await;
+        }
+        tracing::warn!(
+            "m.replace target ${} not found or not authored by {}; storing as a new message",
+            orig_mid,
+            author_uid
+        );
+    }
+
+    let content = agent_convert::convert_agent_matrix_content(matrix_msg, agent_type);
+    let payload = ChatMessagePayload {
+        from_uid: author_uid,
+        target,
+        detail: MessageDetail::Normal(crate::api::message::MessageNormal {
+            content,
+            expires_in: None,
+        }),
+        created_at: DateTime::now(),
+    };
+    send_message(state, payload).await
+}
+
+/// Handle Matrix send message request
+async fn handle_send_message(    state: &State,
     body: Body,
     room_id: &str,
     uid: i64,
@@ -818,6 +893,12 @@ async fn handle_send_message(
     // print 现 instead of actual Chinese characters.
     tracing::info!("Matrix send message body: {}", msg_body);
 
+    // Log the full incoming Matrix event (msgtype / format / formatted_body /
+    // and any custom agent fields), so an agent's exact message format can be
+    // read from the logs in data/logs. `matrix_msg` is the parsed JSON, so its
+    // strings are already \u-decoded (logging raw `body_str` would keep escapes).
+    tracing::info!("Matrix send message event: {}", matrix_msg);
+
     tracing::info!("Received message from {}: {}", sender_uid, msg_body);
 
     // Look up the bot's agent_type to dispatch to the right converter. The
@@ -830,21 +911,17 @@ async fn handle_send_message(
             .and_then(|user| user.agent_type.clone())
     };
 
-    // Convert the Matrix content into a vachat ChatMessageContent (vachat/agent/*).
-    let content = agent_convert::convert_agent_matrix_content(&matrix_msg, agent_type.as_deref());
-
-    // Echo back the message
-    let reply_payload = ChatMessagePayload {
-        from_uid: sender_uid,
+    // Convert and store (honoring m.replace edits), attributing the message to
+    // the Matrix client's uid.
+    match store_agent_matrix_message(
+        &state,
+        &matrix_msg,
+        agent_type.as_deref(),
+        sender_uid,
         target,
-        detail: MessageDetail::Normal(crate::api::message::MessageNormal {
-            content,
-            expires_in: None,
-        }),
-        created_at: DateTime::now(),
-    };
-
-    match send_message(&state, reply_payload).await {
+    )
+    .await
+    {
         Ok(mid) => {
             tracing::info!("Replied with message id: {}", mid);
             Ok(Json(serde_json::json!({
@@ -1044,20 +1121,17 @@ async fn handle_send_encrypted_message(
             .and_then(|user| user.agent_type.clone())
     };
     let matrix_content = decrypted_json.get("content").unwrap_or(&decrypted_json);
-    let content = agent_convert::convert_agent_matrix_content(matrix_content, agent_type.as_deref());
 
-    // Store the decrypted message
-    let reply_payload = ChatMessagePayload {
-        from_uid: sender_uid,
+    // Store the decrypted message (honoring m.replace edits).
+    match store_agent_matrix_message(
+        &state,
+        matrix_content,
+        agent_type.as_deref(),
+        sender_uid,
         target,
-        detail: MessageDetail::Normal(crate::api::message::MessageNormal {
-            content,
-            expires_in: None,
-        }),
-        created_at: DateTime::now(),
-    };
-
-    match send_message(&state, reply_payload).await {
+    )
+    .await
+    {
         Ok(mid) => {
             tracing::info!("Decrypted message stored with id: {}", mid);
             Ok(Json(serde_json::json!({
@@ -1233,22 +1307,19 @@ async fn handle_megolm_encrypted_message(
             .and_then(|user| user.agent_type.clone())
     };
     let matrix_content = decrypted_json.get("content").unwrap_or(&decrypted_json);
-    let content = agent_convert::convert_agent_matrix_content(matrix_content, agent_type.as_deref());
 
-    // Store the decrypted message
+    // Store the decrypted message (honoring m.replace edits).
     // from_uid = bot_uid (the bot is the sender of the stored message)
     // target = User(sender_uid) (send to the user who sent the original message)
-    let reply_payload = ChatMessagePayload {
-        from_uid: bot_uid,
+    match store_agent_matrix_message(
+        &state,
+        matrix_content,
+        agent_type.as_deref(),
+        bot_uid,
         target,
-        detail: MessageDetail::Normal(crate::api::message::MessageNormal {
-            content,
-            expires_in: None,
-        }),
-        created_at: DateTime::now(),
-    };
-
-    match send_message(&state, reply_payload).await {
+    )
+    .await
+    {
         Ok(mid) => {
             tracing::info!("Decrypted Megolm message stored with id: {}", mid);
             Ok(Json(serde_json::json!({
@@ -1412,4 +1483,258 @@ async fn handle_redact_message(
     Ok(Json(json!({
         "event_id": format!("${}_redact", uid)
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::StreamExt;
+    use serde_json::json;
+
+    use crate::test_harness::TestServer;
+
+    // ---- matrix_replace (m.replace edit parsing) ----
+
+    fn replace_event(orig_mid: i64) -> Value {
+        json!({
+            "msgtype": "m.text",
+            "body": "* 🔍 Searching the web for weather\n📄 Reading https://example.com",
+            "m.new_content": {
+                "msgtype": "m.text",
+                "body": "🔍 Searching the web for weather\n📄 Reading https://example.com"
+            },
+            "m.relates_to": {
+                "event_id": format!("${}", orig_mid),
+                "rel_type": "m.replace"
+            }
+        })
+    }
+
+    #[test]
+    fn matrix_replace_parses_event_id_and_new_content() {
+        let event = replace_event(610);
+        let (mid, new_content) = matrix_replace(&event).expect("replace");
+        assert_eq!(mid, 610);
+        assert_eq!(
+            new_content.get("body").and_then(|v| v.as_str()).unwrap(),
+            "🔍 Searching the web for weather\n📄 Reading https://example.com"
+        );
+        // The `* ` fallback marker lives on the outer body, not m.new_content.
+        assert!(new_content.get("m.new_content").is_none());
+    }
+
+    #[test]
+    fn matrix_replace_without_new_content_falls_back_to_event() {
+        let mut event = replace_event(610);
+        event.as_object_mut().unwrap().remove("m.new_content");
+        let (mid, new_content) = matrix_replace(&event).expect("replace");
+        assert_eq!(mid, 610);
+        assert!(new_content
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .starts_with("* "));
+    }
+
+    #[test]
+    fn matrix_replace_ignores_other_relations() {
+        // m.in_reply_to (e.g. Hermes's final answer) is not an edit.
+        let reply = json!({
+            "msgtype": "m.text",
+            "body": "the answer",
+            "m.relates_to": { "m.in_reply_to": { "event_id": "$609" } }
+        });
+        assert!(matrix_replace(&reply).is_none());
+
+        // No m.relates_to at all.
+        assert!(matrix_replace(&json!({ "msgtype": "m.text", "body": "hi" })).is_none());
+
+        // Non-numeric event ids do not map to a vachat mid.
+        let foreign = json!({
+            "msgtype": "m.text",
+            "body": "* edited",
+            "m.relates_to": { "event_id": "$mautrix-python_123", "rel_type": "m.replace" }
+        });
+        assert!(matrix_replace(&foreign).is_none());
+    }
+
+    // ---- end-to-end: Matrix send + m.replace edit (Hermes status flow) ----
+
+    async fn create_hermes_bot(server: &TestServer, admin_token: &str) -> i64 {
+        let resp = server
+            .post("/api/admin/user")
+            .header("X-API-Key", admin_token)
+            .header("Referer", "http://localhost/")
+            .body_json(&json!({
+                "email": "hermes@zimu.pub",
+                "password": "123456",
+                "name": "hermes",
+                "gender": 1,
+                "is_admin": false,
+                "is_bot": true,
+                "agent_type": "hermes",
+            }))
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        resp.json().await.value().object().get("uid").i64()
+    }
+
+    async fn matrix_login(server: &TestServer) -> String {
+        let resp = server
+            .post("/_matrix/client/v3/login")
+            .body_json(&json!({
+                "type": "m.login.password",
+                "user": "@hermes:localhost",
+                "password": "123456",
+            }))
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        resp.json()
+            .await
+            .value()
+            .object()
+            .get("access_token")
+            .string()
+            .to_string()
+    }
+
+    async fn matrix_send(
+        server: &TestServer,
+        token: &str,
+        room_id: &str,
+        txn: &str,
+        content: &Value,
+    ) -> i64 {
+        let resp = server
+            .put(format!(
+                "/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+                room_id, txn
+            ))
+            .header("Authorization", format!("Bearer {}", token))
+            .body_json(content)
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        let body = resp.json().await;
+        let event_id = body.value().object().get("event_id").string().to_string();
+        event_id.strip_prefix('$').unwrap().parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn hermes_status_message_edited_in_place() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let user1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let user1_token = server.login("user1@zimu.pub").await;
+        let mut user1_events = server.subscribe_events(&user1_token, Some(&["chat"])).await;
+
+        let bot_uid = create_hermes_bot(&server, &admin_token).await;
+        let token = matrix_login(&server).await;
+        let room_id = format!("!dm_{}_{}:localhost", user1, bot_uid);
+
+        // First activity line: a new status message.
+        let mid1 = matrix_send(
+            &server,
+            &token,
+            &room_id,
+            "txn1",
+            &json!({
+                "msgtype": "m.text",
+                "body": "🔍 Searching the web for 武汉明天天气预报"
+            }),
+        )
+        .await;
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid1);
+        msg.get("from_uid").assert_i64(bot_uid);
+        msg.get("target").object().get("uid").assert_i64(user1);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("normal");
+        detail
+            .get("content_type")
+            .assert_string("vachat/agent/status");
+        detail
+            .get("content")
+            .assert_string("🔍 Searching the web for 武汉明天天气预报");
+
+        // m.replace edit accumulating a second activity line: an edit reaction
+        // on mid1, not a new message.
+        let mid2 = matrix_send(
+            &server,
+            &token,
+            &room_id,
+            "txn2",
+            &json!({
+                "msgtype": "m.text",
+                "body": "* 🔍 Searching the web for 武汉明天天气预报\n📄 Reading https://www.weather.com.cn/weather/10",
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": "🔍 Searching the web for 武汉明天天气预报\n📄 Reading https://www.weather.com.cn/weather/10"
+                },
+                "m.relates_to": { "event_id": format!("${}", mid1), "rel_type": "m.replace" }
+            }),
+        )
+        .await;
+        assert_ne!(mid1, mid2);
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid2);
+        msg.get("from_uid").assert_i64(bot_uid);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("reaction");
+        detail.get("mid").assert_i64(mid1);
+        let reaction_detail = detail.get("detail").object();
+        reaction_detail.get("type").assert_string("edit");
+        reaction_detail
+            .get("content_type")
+            .assert_string("vachat/agent/status");
+        let content = reaction_detail.get("content").string();
+        assert!(content.starts_with("🔍 Searching the web"));
+        assert!(content.contains("📄 Reading https://www.weather.com.cn"));
+    }
+
+    #[tokio::test]
+    async fn hermes_replace_of_missing_message_falls_back_to_new() {
+        let server = TestServer::new().await;
+        let admin_token = server.login_admin().await;
+        let user1 = server.create_user(&admin_token, "user1@zimu.pub").await;
+        let user1_token = server.login("user1@zimu.pub").await;
+        let mut user1_events = server.subscribe_events(&user1_token, Some(&["chat"])).await;
+
+        let bot_uid = create_hermes_bot(&server, &admin_token).await;
+        let token = matrix_login(&server).await;
+        let room_id = format!("!dm_{}_{}:localhost", user1, bot_uid);
+
+        // An edit referencing a message that does not exist is stored as a new
+        // normal message instead of being dropped.
+        let mid = matrix_send(
+            &server,
+            &token,
+            &room_id,
+            "txn1",
+            &json!({
+                "msgtype": "m.text",
+                "body": "* 🔍 Searching the web for weather",
+                "m.new_content": { "msgtype": "m.text", "body": "🔍 Searching the web for weather" },
+                "m.relates_to": { "event_id": "$999999", "rel_type": "m.replace" }
+            }),
+        )
+        .await;
+
+        let msg = user1_events.next().await.unwrap();
+        let msg = msg.value().object();
+        msg.get("mid").assert_i64(mid);
+        let detail = msg.get("detail").object();
+        detail.get("type").assert_string("normal");
+        detail
+            .get("content_type")
+            .assert_string("vachat/agent/status");
+        // The `* ` fallback marker was stripped by inference.
+        detail.get("content").assert_string("🔍 Searching the web for weather");
+    }
 }
