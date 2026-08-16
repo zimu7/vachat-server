@@ -13,7 +13,6 @@ use poem_openapi::{
     payload::{Json, PlainText},
     ApiRequest, Enum, Object, Union,
 };
-use rc_msgdb::MsgDb;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -22,6 +21,7 @@ use crate::{
         group::Group, group::GroupAnnouncement, resource::FileMeta, user::UserInfo, DateTime,
         LangId, PinnedMessage, UpdateAction,
     },
+    msg_store,
     state::{BroadcastEvent, Cache, UserStatus},
     State,
 };
@@ -739,7 +739,7 @@ enum InternalSendMessageTarget {
     Dm { from_uid: i64, to_uid: i64 },
 }
 
-fn internal_send_message(
+async fn internal_send_message(
     state: &State,
     target: InternalSendMessageTarget,
     payload: ChatMessagePayload,
@@ -747,28 +747,27 @@ fn internal_send_message(
     let (msg_id, targets) = match target {
         InternalSendMessageTarget::Group { gid, targets } => {
             // send message to group
-            let mid = state
-                .msg_db
-                .messages()
-                .send_to_group(
-                    gid,
-                    targets.iter().copied(),
-                    &serde_json::to_vec(&payload).map_err(InternalServerError)?,
-                )
-                .map_err(InternalServerError)?;
+            let mid = msg_store::send_to_group(
+                &state.db_pool,
+                gid,
+                payload.from_uid,
+                targets.iter().copied(),
+                &serde_json::to_vec(&payload).map_err(InternalServerError)?,
+            )
+            .await
+            .map_err(InternalServerError)?;
             (mid, targets)
         }
         InternalSendMessageTarget::Dm { from_uid, to_uid } => {
             // send message to dm
-            let mid = state
-                .msg_db
-                .messages()
-                .send_to_dm(
-                    from_uid,
-                    to_uid,
-                    &serde_json::to_vec(&payload).map_err(InternalServerError)?,
-                )
-                .map_err(InternalServerError)?;
+            let mid = msg_store::send_to_dm(
+                &state.db_pool,
+                from_uid,
+                to_uid,
+                &serde_json::to_vec(&payload).map_err(InternalServerError)?,
+            )
+            .await
+            .map_err(InternalServerError)?;
             (mid, vec![from_uid, to_uid])
         }
     };
@@ -783,33 +782,30 @@ fn internal_send_message(
                 created_at: payload.created_at,
             };
 
-            state
-                .msg_db
-                .messages()
-                .insert_merged_msg(
-                    msg_id,
-                    &serde_json::to_vec(&merged_payload).map_err(InternalServerError)?,
-                )
-                .map_err(InternalServerError)?;
+            msg_store::insert_merged_msg(
+                &state.db_pool,
+                msg_id,
+                &serde_json::to_vec(&merged_payload).map_err(InternalServerError)?,
+            )
+            .await
+            .map_err(InternalServerError)?;
 
             Some(msg_id)
         }
         MessageDetail::Reaction(reaction) => match &reaction.detail {
             MessageReactionDetail::Edit(edit) => {
-                state
-                    .msg_db
-                    .messages()
-                    .update_merged_msg(reaction.mid, |data| {
-                        match serde_json::from_slice::<MergedMessagePayload>(data) {
-                            Ok(mut merged_payload) => {
-                                merged_payload.content = edit.content.clone();
-                                serde_json::to_vec(&merged_payload)
-                                    .unwrap_or_else(|_| data.to_vec())
-                            }
-                            Err(_) => data.to_vec(),
+                msg_store::update_merged_msg(&state.db_pool, reaction.mid, |data| {
+                    match serde_json::from_slice::<MergedMessagePayload>(data) {
+                        Ok(mut merged_payload) => {
+                            merged_payload.content = edit.content.clone();
+                            serde_json::to_vec(&merged_payload)
+                                .unwrap_or_else(|_| data.to_vec())
                         }
-                    })
-                    .map_err(InternalServerError)?;
+                        Err(_) => data.to_vec(),
+                    }
+                })
+                .await
+                .map_err(InternalServerError)?;
 
                 Some(reaction.mid)
             }
@@ -824,14 +820,13 @@ fn internal_send_message(
                 created_at: payload.created_at,
             };
 
-            state
-                .msg_db
-                .messages()
-                .insert_merged_msg(
-                    msg_id,
-                    &serde_json::to_vec(&merged_payload).map_err(InternalServerError)?,
-                )
-                .map_err(InternalServerError)?;
+            msg_store::insert_merged_msg(
+                &state.db_pool,
+                msg_id,
+                &serde_json::to_vec(&merged_payload).map_err(InternalServerError)?,
+            )
+            .await
+            .map_err(InternalServerError)?;
 
             Some(msg_id)
         }
@@ -945,21 +940,15 @@ pub async fn send_message(state: &State, mut payload: ChatMessagePayload) -> poe
             };
 
             // send message
-            tokio::task::spawn_blocking({
-                let state = state.clone();
-                move || {
-                    internal_send_message(
-                        &state,
-                        InternalSendMessageTarget::Dm {
-                            from_uid,
-                            to_uid: uid,
-                        },
-                        payload,
-                    )
-                }
-            })
-            .await
-            .map_err(InternalServerError)??
+            internal_send_message(
+                &state,
+                InternalSendMessageTarget::Dm {
+                    from_uid,
+                    to_uid: uid,
+                },
+                payload,
+            )
+            .await?
         }
         MessageTarget::Group(MessageTargetGroup { gid }) => {
             let notify_message = payload.notify_message(&cache, &mentions);
@@ -1024,21 +1013,15 @@ pub async fn send_message(state: &State, mut payload: ChatMessagePayload) -> poe
             }
 
             // send message
-            tokio::task::spawn_blocking({
-                let state = state.clone();
-                move || {
-                    internal_send_message(
-                        &state,
-                        InternalSendMessageTarget::Group {
-                            gid,
-                            targets: target_users,
-                        },
-                        payload,
-                    )
-                }
-            })
-            .await
-            .map_err(InternalServerError)??
+            internal_send_message(
+                &state,
+                InternalSendMessageTarget::Group {
+                    gid,
+                    targets: target_users,
+                },
+                payload,
+            )
+            .await?
         }
     };
 
@@ -1065,10 +1048,12 @@ pub fn parse_properties_from_base64(s: Option<impl AsRef<str>>) -> Option<HashMa
     })
 }
 
-pub fn get_merged_message(db: &MsgDb, mid: i64) -> poem::Result<Option<MergedMessagePayload>> {
-    Ok(db
-        .messages()
-        .get_merged_msg(mid)
+pub async fn get_merged_message(
+    db: &sqlx::SqlitePool,
+    mid: i64,
+) -> poem::Result<Option<MergedMessagePayload>> {
+    Ok(msg_store::get_merged_msg(db, mid)
+        .await
         .map_err(InternalServerError)?
         .and_then(|data| serde_json::from_slice(&data).ok()))
 }

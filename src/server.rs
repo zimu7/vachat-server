@@ -6,7 +6,6 @@ use poem::{
     middleware::{Compression, Cors, TokioMetrics, Tracing},
     Endpoint, EndpointExt, Route,
 };
-use rc_msgdb::MsgDb;
 use sqlx::migrate::{MigrateDatabase, Migrator};
 use tokio::sync::{broadcast, mpsc, RwLock};
 
@@ -56,7 +55,6 @@ pub async fn create_state(config_path: &Path, config: Arc<Config>) -> Result<Sta
 
     std::fs::create_dir_all(config.system.tmp_dir()).expect("create tmp dir");
     std::fs::create_dir_all(config.system.db_dir()).expect("create db dir");
-    std::fs::create_dir_all(config.system.msg_dir()).expect("create message dir");
     std::fs::create_dir_all(config.system.thumbnail_dir()).expect("create thumbnails dir");
     std::fs::create_dir_all(config.system.file_dir()).expect("create file dir");
     std::fs::create_dir_all(config.system.avatar_dir()).expect("create avatars dir");
@@ -73,15 +71,8 @@ pub async fn create_state(config_path: &Path, config: Arc<Config>) -> Result<Sta
     let db_pool = SqlitePool::connect(&dsn).await?;
     MIGRATOR.run(&db_pool).await?;
 
-    // open message db
-    tracing::info!(
-        path = config.system.msg_dir().display().to_string().as_str(),
-        "open message db."
-    );
-    let msg_db = MsgDb::open(config.system.msg_dir())?;
-
     let (groups, users) = futures_util::try_join!(
-        State::load_groups_cache(&msg_db, &db_pool),
+        State::load_groups_cache(&db_pool),
         State::load_users_cache(&db_pool),
     )?;
 
@@ -110,7 +101,6 @@ pub async fn create_state(config_path: &Path, config: Arc<Config>) -> Result<Sta
         config: config.clone(),
         config_path: config_path.to_owned(),
         db_pool,
-        msg_db: Arc::new(msg_db),
         cache: Arc::new(RwLock::new(Cache {
             dynamic_config: Default::default(),
             groups,
@@ -299,7 +289,7 @@ async fn process_bot_online_state(state: State, mut rx: mpsc::UnboundedReceiver<
 async fn process_msg_updated(state: State, mut rx: mpsc::UnboundedReceiver<i64>) {
     while let Some(mid) = rx.recv().await {
         // process pinned messages
-        if let Ok(merged_msg) = get_merged_message(&state.msg_db, mid) {
+        if let Ok(merged_msg) = get_merged_message(&state.db_pool, mid).await {
             let mut cache = state.cache.write().await;
             let Cache { groups, users, .. } = &mut *cache;
 

@@ -30,6 +30,7 @@ use crate::{
         ChatMessage, DateTime, GroupChangedMessage, KickFromGroupReason, MessageTarget,
     },
     middleware::guest_forbidden,
+    msg_store,
     state::{BroadcastEvent, Cache, CacheGroup, GroupType},
     State,
 };
@@ -406,11 +407,9 @@ impl ApiGroup {
         };
         let had_announcement = group.announcement.is_some();
 
-        // Clear messages from MsgDb
-        let removed_mids = state
-            .msg_db
-            .messages()
-            .clear_group_messages(gid.0)
+        // Clear messages from SQLite
+        let removed_mids = msg_store::clear_group_messages(&state.db_pool, gid.0)
+            .await
             .map_err(InternalServerError)?;
 
         // Delete pinned messages, announcement, files, and read indexes from SQLite
@@ -1033,11 +1032,10 @@ impl ApiGroup {
             return Err(Error::from_status(StatusCode::FORBIDDEN));
         }
 
-        let msgs = state
-            .msg_db
-            .messages()
-            .fetch_group_messages_before(gid.0, before.0, limit.0)
-            .map_err(InternalServerError)?;
+        let msgs =
+            msg_store::fetch_group_messages_before(&state.db_pool, gid.0, before.0, limit.0)
+                .await
+                .map_err(InternalServerError)?;
         Ok(Json(decode_messages(msgs)))
     }
 
@@ -1070,7 +1068,8 @@ impl ApiGroup {
             return Err(Error::from_status(StatusCode::CONFLICT));
         }
 
-        let merged_msg = get_merged_message(&state.msg_db, req.mid)?
+        let merged_msg = get_merged_message(&state.db_pool, req.mid)
+            .await?
             .ok_or_else(|| Error::from_status(StatusCode::NOT_FOUND))?;
 
         // update database

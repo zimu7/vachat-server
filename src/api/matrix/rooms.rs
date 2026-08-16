@@ -17,6 +17,7 @@ use crate::api::message::{
     MessageReactionEdit, MessageTarget,
 };
 use crate::api::DateTime;
+use crate::msg_store;
 use crate::state::State;
 
 use super::agent_convert;
@@ -675,10 +676,8 @@ async fn get_latest_event_id_for_room(state: &State, room_id: &str) -> String {
 
     // Try to find a recent message for this bot user
     for bot_uid in &bot_uids {
-        if let Ok(msgs) = state
-            .msg_db
-            .messages()
-            .fetch_user_messages_after(*bot_uid, None, 1)
+        if let Ok(msgs) =
+            msg_store::fetch_user_messages_after(&state.db_pool, *bot_uid, None, 1).await
         {
             if let Some((mid, msg_bytes)) = msgs.first() {
                 if let Ok(payload) = serde_json::from_slice::<ChatMessagePayload>(msg_bytes) {
@@ -814,10 +813,8 @@ async fn store_agent_matrix_message(
     target: MessageTarget,
 ) -> poem::Result<i64> {
     if let Some((orig_mid, new_content)) = matrix_replace(matrix_msg) {
-        let editable = state
-            .msg_db
-            .messages()
-            .get(orig_mid)
+        let editable = msg_store::get(&state.db_pool, orig_mid)
+            .await
             .map_err(InternalServerError)?
             .and_then(|data| serde_json::from_slice::<ChatMessagePayload>(&data).ok())
             .is_some_and(|orig| orig.from_uid == author_uid);

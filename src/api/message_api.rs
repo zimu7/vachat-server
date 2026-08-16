@@ -17,6 +17,7 @@ use crate::{
         ChatMessagePayload, DateTime, MessageTarget, MessageTargetGroup, MessageTargetUser,
     },
     middleware::guest_forbidden,
+    msg_store,
     State,
 };
 
@@ -111,10 +112,8 @@ impl ApiMessage {
         let properties = parse_properties_from_base64(properties.0);
         let content = req.into_chat_message_content(&state, properties).await?;
 
-        let msg_data = match state
-            .msg_db
-            .messages()
-            .get(mid.0)
+        let msg_data = match msg_store::get(&state.db_pool, mid.0)
+            .await
             .map_err(InternalServerError)?
         {
             Some(data) => data,
@@ -181,10 +180,8 @@ async fn do_reaction(
     mid: i64,
     detail: MessageReactionDetail,
 ) -> Result<ReactionApiResponse> {
-    let msg_data = match state
-        .msg_db
-        .messages()
-        .get(mid)
+    let msg_data = match msg_store::get(&state.db_pool, mid)
+        .await
         .map_err(InternalServerError)?
     {
         Some(data) => data,

@@ -16,7 +16,6 @@ use poem::{
     http::StatusCode,
 };
 use poem_openapi::{types::ToJSON, Enum};
-use rc_msgdb::MsgDb;
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::SqlitePool;
@@ -391,7 +390,6 @@ pub struct State {
     #[allow(dead_code)]
     pub config_path: PathBuf,
     pub db_pool: SqlitePool,
-    pub msg_db: Arc<MsgDb>,
     pub cache: Arc<RwLock<Cache>>,
     pub event_sender: Arc<broadcast::Sender<Arc<BroadcastEvent>>>,
     pub msg_updated_channel: Arc<mpsc::UnboundedSender<i64>>,
@@ -627,10 +625,7 @@ impl State {
         Ok(users)
     }
 
-    pub async fn load_groups_cache(
-        msg_db: &MsgDb,
-        db: &SqlitePool,
-    ) -> sqlx::Result<BTreeMap<i64, CacheGroup>> {
+    pub async fn load_groups_cache(db: &SqlitePool) -> sqlx::Result<BTreeMap<i64, CacheGroup>> {
         let mut groups = BTreeMap::new();
 
         let sql =
@@ -658,7 +653,7 @@ impl State {
             let mut pinned_messages = Vec::new();
 
             for (mid, created_by, created_at) in ids {
-                if let Some(merged_msg) = get_merged_message(msg_db, mid).ok().flatten() {
+                if let Some(merged_msg) = get_merged_message(db, mid).await.ok().flatten() {
                     pinned_messages.push(PinnedMessage {
                         mid,
                         created_by,

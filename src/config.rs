@@ -83,10 +83,6 @@ impl SystemConfig {
         self.data_dir.join("db")
     }
 
-    pub fn msg_dir(&self) -> PathBuf {
-        self.data_dir.join("msg")
-    }
-
     pub fn avatar_dir(&self) -> PathBuf {
         self.data_dir.join("avatar")
     }

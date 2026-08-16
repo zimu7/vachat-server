@@ -14,7 +14,6 @@ use poem_openapi::{
     types::{Email, ToJSON},
     ApiRequest, ApiResponse, Enum, Object, OpenApi,
 };
-use rc_msgdb::MsgDb;
 use tokio::{
     sync::{
         broadcast::Receiver,
@@ -44,6 +43,7 @@ use crate::{
     },
     create_user::{CreateUser, CreateUserBy, CreateUserError},
     middleware::guest_forbidden,
+    msg_store,
     password::{hash_password, verify_password},
     state::{BroadcastEvent, Cache, CacheContactInfo, CacheDevice, CacheUser, UserEvent},
     SqlitePool, State,
@@ -781,11 +781,10 @@ impl ApiUser {
         before: Query<Option<i64>>,
         #[oai(default = "default_get_history_messages_limit")] limit: Query<usize>,
     ) -> Result<Json<Vec<ChatMessage>>> {
-        let msgs = state
-            .msg_db
-            .messages()
-            .fetch_dm_messages_before(token.uid, uid.0, before.0, limit.0)
-            .map_err(InternalServerError)?;
+        let msgs =
+            msg_store::fetch_dm_messages_before(&state.db_pool, token.uid, uid.0, before.0, limit.0)
+                .await
+                .map_err(InternalServerError)?;
         Ok(Json(decode_messages(msgs)))
     }
 
@@ -810,7 +809,8 @@ impl ApiUser {
         let receiver = state.event_sender.subscribe();
         let users_log_msg = fetch_user_log(&cache, &state.db_pool, users_version.0).await?;
         let users_state_msg = get_users_state(&cache, uid);
-        let newest_messages = fetch_newest_messages(&cache, &state.msg_db, uid, after_mid.0)?;
+        let newest_messages =
+            fetch_newest_messages(&cache, &state.db_pool, uid, after_mid.0).await?;
         let push_start_id = newest_messages.last().map(|msg| msg.mid);
         let messages = users_log_msg
             .into_iter()
@@ -1960,15 +1960,14 @@ fn create_user_event_receiver(
     }
 }
 
-fn fetch_newest_messages(
+async fn fetch_newest_messages(
     cache: &Cache,
-    msg_db: &MsgDb,
+    db_pool: &SqlitePool,
     uid: i64,
     after_mid: Option<i64>,
 ) -> Result<Vec<ChatMessage>> {
-    Ok(msg_db
-        .messages()
-        .fetch_user_messages_after(uid, after_mid, MAX_NEWEST_MESSAGES)
+    Ok(msg_store::fetch_user_messages_after(db_pool, uid, after_mid, MAX_NEWEST_MESSAGES)
+        .await
         .map_err(InternalServerError)?
         .into_iter()
         .filter_map(|(id, data)| {

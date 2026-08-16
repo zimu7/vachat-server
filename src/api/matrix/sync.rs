@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 
 use crate::api::message::{ChatMessagePayload, MessageDetail, MessageTarget};
 use crate::api::DateTime;
+use crate::msg_store;
 use crate::state::{Cache, CacheGroup, State};
 
 /// Global cache for bot uids and max mid
@@ -208,10 +209,8 @@ pub async fn init_bot_cache(state: &State) {
     // Get max mid from all bot users
     let mut max_mid: i64 = 0;
     for bot_uid in &bot_uids {
-        if let Ok(msgs) = state
-            .msg_db
-            .messages()
-            .fetch_user_messages_after(*bot_uid, None, 1)
+        if let Ok(msgs) =
+            msg_store::fetch_user_messages_after(&state.db_pool, *bot_uid, None, 1).await
         {
             if let Some((mid, _)) = msgs.first() {
                 max_mid = max_mid.max(*mid);
@@ -333,7 +332,10 @@ pub async fn sync(
 
         // Quick check: get max message ID from database and compare with cached_max_mid
         // If max_msg_id <= cached_max_mid, there are no new messages
-        let max_msg_id = state.msg_db.get_max_msg_id().unwrap_or(None).unwrap_or(0);
+        let max_msg_id = msg_store::get_max_msg_id(&state.db_pool)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(0);
         let remaining_time = deadline_ms - DateTime::now().timestamp_millis();
         let sleep_duration = if remaining_time > 0 {
             (CHECK_INTERVAL_MS as i64).min(remaining_time) as u64
@@ -401,11 +403,7 @@ async fn fetch_bot_messages(
     };
 
     // Fetch all messages after since_mid in a single call
-    let all_msgs = match state
-        .msg_db
-        .messages()
-        .fetch_messages_after(since_mid, 1000)
-    {
+    let all_msgs = match msg_store::fetch_messages_after(&state.db_pool, since_mid, 1000).await {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::warn!("Failed to fetch messages: {}", e);

@@ -6,6 +6,7 @@ mod api_key;
 mod config;
 mod create_user;
 mod middleware;
+mod msg_store;
 mod password;
 mod self_signed;
 mod server;

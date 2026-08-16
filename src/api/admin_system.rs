@@ -17,6 +17,7 @@ use crate::{
     },
     config::Config,
     create_user::{CreateUser, CreateUserBy},
+    msg_store,
     state::{DynamicConfig, DynamicConfigEntry},
     State,
 };
@@ -563,16 +564,17 @@ impl ApiAdminSystem {
         let page = page.0.max(1);
         let page_size = page_size.0.min(1000);
 
-        let max_mid = state.msg_db.get_max_msg_id().unwrap_or(None).unwrap_or(0);
+        let max_mid = msg_store::get_max_msg_id(&state.db_pool)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(0);
         let mut files: Vec<AdminFile> = Vec::new();
         let mut cursor = max_mid;
         let batch_size: usize = 500;
 
         while cursor > 0 {
-            let msgs = state
-                .msg_db
-                .messages()
-                .fetch_messages_before_rev(cursor, batch_size)
+            let msgs = msg_store::fetch_messages_before_rev(&state.db_pool, cursor, batch_size)
+                .await
                 .map_err(InternalServerError)?;
             if msgs.is_empty() {
                 break;

@@ -82,7 +82,8 @@ async fn internal_create_message_archive(
     mid_list.sort_unstable();
 
     for mid in mid_list {
-        let merged_payload = get_merged_message(&state.msg_db, mid)?
+        let merged_payload = get_merged_message(&state.db_pool, mid)
+            .await?
             .ok_or_else(|| poem::Error::from_status(StatusCode::NOT_FOUND))?;
 
         if !is_admin {
