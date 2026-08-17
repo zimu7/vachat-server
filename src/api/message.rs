@@ -810,7 +810,16 @@ async fn internal_send_message(
                 Some(reaction.mid)
             }
             MessageReactionDetail::Like(_) => None,
-            MessageReactionDetail::Delete(_) => None,
+            MessageReactionDetail::Delete(_) => {
+                // Removing the merged message makes `process_msg_updated` see
+                // `None` for this mid, which unpins it and broadcasts
+                // `PinnedMessageUpdated { msg: None }`.
+                msg_store::remove_merged_msg(&state.db_pool, reaction.mid)
+                    .await
+                    .map_err(InternalServerError)?;
+
+                Some(reaction.mid)
+            }
         },
         MessageDetail::Reply(reply) => {
             let merged_payload = MergedMessagePayload {
