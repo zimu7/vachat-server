@@ -2069,6 +2069,12 @@ async fn events_loop(
                                 if current_uid != *uid {
                                     continue;
                                 }
+                                // Do not echo the change back to the device that
+                                // made it; the message carries `from_device` so
+                                // the other devices know its origin.
+                                if message.from_device == current_device {
+                                    continue;
+                                }
                                 if tx_msg.send(Message::UserSettingsChanged(message.clone())).is_err() {
                                     break;
                                 }

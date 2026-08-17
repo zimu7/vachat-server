@@ -16,14 +16,17 @@ pub async fn devices_handler(state: Data<&State>, _body: Body, req: &Request) ->
     // Validate access token
     let uid = super::auth::validate_access_token(&state, req).await?;
 
-    let path = req.original_uri().path();
+    // Nested under `/_matrix` (prefix stripped by poem's nest), so `req.uri()`
+    // is "/client/v3/devices..." here. `original_uri()` is not populated by
+    // poem's TestClient, so do not rely on it.
+    let path = req.uri().path();
     let method = req.method();
 
     tracing::info!("devices_handler: path={}, method={}, uid={}", path, method, uid);
 
-    // Parse device_id from path (e.g., /_matrix/client/v3/devices/BOTDEVICE)
+    // Parse device_id from path (e.g., /client/v3/devices/BOTDEVICE)
     let device_id = path
-        .strip_prefix("/_matrix/client/v3/devices")
+        .strip_prefix("/client/v3/devices")
         .map(|s| s.trim_start_matches('/').trim_end_matches('/'))
         .unwrap_or("");
 
@@ -180,12 +183,15 @@ pub async fn user_handler(state: Data<&State>, body: Body, req: &Request) -> Res
     // Validate access token and get uid
     let uid = super::auth::validate_access_token(&state, req).await?;
 
-    let path = req.original_uri().path();
+    // Nested under `/_matrix` (prefix stripped by poem's nest), so `req.uri()`
+    // is "/client/v3/user/..." here. `original_uri()` is not populated by
+    // poem's TestClient, so do not rely on it.
+    let path = req.uri().path();
 
     tracing::debug!("user_handler, path={}", path);
 
     // Check if it's a user endpoint
-    if !path.starts_with("/_matrix/client/v3/user/") {
+    if !path.starts_with("/client/v3/user/") {
         return Err(poem::error::Error::from_string(
             "Invalid path",
             StatusCode::BAD_REQUEST,
@@ -193,7 +199,7 @@ pub async fn user_handler(state: Data<&State>, body: Body, req: &Request) -> Res
     }
 
     let path_suffix = path
-        .strip_prefix("/_matrix/client/v3/user/")
+        .strip_prefix("/client/v3/user/")
         .ok_or_else(|| poem::error::Error::from_string("Invalid path", StatusCode::BAD_REQUEST))?;
 
     // Find the next '/' to separate user_id from the rest

@@ -444,7 +444,11 @@ mod tests {
         self_signed::create_self_signed_config,
     };
 
+    // Requires cert/ca.crt AND cert/ca.key in the working directory. The CA
+    // private key is never committed, so this only runs on machines that have
+    // generated it locally (run explicitly with `cargo test -- --ignored`).
     #[tokio::test]
+    #[ignore = "requires local cert/ca.key (CA private key, not committed)"]
     async fn test_tls_server() {
         let tempdir = tempfile::TempDir::new().unwrap();
         let config = Config {

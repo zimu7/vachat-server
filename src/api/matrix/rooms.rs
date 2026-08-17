@@ -39,12 +39,16 @@ pub async fn rooms_handler(state: Data<&State>, body: Body, req: &Request) -> Re
     // Validate access token and get uid
     let uid = super::auth::validate_access_token(&state, req).await?;
 
-    let path = req.original_uri().path();
+    // The handler is nested under `/_matrix` (prefix stripped by poem's nest),
+    // so `req.uri()` is "/client/v3/rooms/..." in both production and tests.
+    // Do NOT use `original_uri()` here: the hyper server fills it with the full
+    // pre-strip path, but poem's TestClient never populates it (stays "/").
+    let path = req.uri().path();
 
     tracing::debug!("rooms_handler, path={}, method={}", path, req.method());
 
     // Check if it's a room endpoint
-    if !path.starts_with("/_matrix/client/v3/rooms/") {
+    if !path.starts_with("/client/v3/rooms/") {
         return Err(poem::error::Error::from_string(
             "Invalid path",
             StatusCode::BAD_REQUEST,
@@ -52,7 +56,7 @@ pub async fn rooms_handler(state: Data<&State>, body: Body, req: &Request) -> Re
     }
 
     let path = path
-        .strip_prefix("/_matrix/client/v3/rooms/")
+        .strip_prefix("/client/v3/rooms/")
         .ok_or_else(|| poem::error::Error::from_string("Invalid path", StatusCode::BAD_REQUEST))?;
 
     let parts: Vec<&str> = path.split('/').collect();
@@ -96,7 +100,7 @@ pub async fn rooms_handler(state: Data<&State>, body: Body, req: &Request) -> Re
     if parts.len() < 2 {
         tracing::warn!(
             "Invalid path format, part split invalid, full path {}",
-            req.original_uri().path()
+            req.uri().path()
         );
         return Err(poem::error::Error::from_string(
             "Invalid path format, parts inavlid",
@@ -203,7 +207,7 @@ pub async fn rooms_handler(state: Data<&State>, body: Body, req: &Request) -> Re
 
     tracing::warn!(
         "Invalid path format, full path: {}",
-        req.original_uri().path()
+        req.uri().path()
     );
 
     Err(poem::error::Error::from_string(
