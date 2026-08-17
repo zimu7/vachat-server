@@ -2167,6 +2167,7 @@ async fn events_loop(
 mod tests {
     use std::time::Duration;
 
+    use base64::Engine;
     use futures_util::StreamExt;
     use itertools::Itertools;
     use serde_json::json;
@@ -2286,7 +2287,7 @@ mod tests {
             .header("X-API-Key", &admin_token)
             .header(
                 "X-Properties",
-                base64::encode(
+                base64::engine::general_purpose::STANDARD.encode(
                     serde_json::to_string(&json!({
                         "a": 10,
                         "b": "abc",
